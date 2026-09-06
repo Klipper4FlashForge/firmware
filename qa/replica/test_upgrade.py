@@ -360,16 +360,32 @@ def test_helixscreen_settings_survive_the_wipe(upgraded):
 
 
 def test_flashforges_config_directory_is_never_written(upgraded):
-    """The property that makes flashing back to stock work: no install writes
-    into /usr/data/config.
+    """The property that makes flashing back to stock work: an install writes
+    nothing into /usr/data/config.
 
-    Asked with the names only the mod ships. printer.cfg and printer.base.cfg
-    are FlashForge's own and belong in that directory, so their presence says
-    nothing -- but a moonraker.conf there could only have come from an
-    installer that still wrote it."""
-    for name in ("moonraker.conf", "moonraker-custom.conf", "timelapse.cfg"):
-        assert not upgraded.file(CONFDIR + "/" + name).exists, (
-            "the update wrote %s/%s -- that directory is FlashForge's and a "
+    REMOVED FIRST, THEN INSTALLED, and that is the whole design of the test.
+    Asking whether these files are there would answer a different question on
+    a machine that has been through an older release -- one that DID write
+    them -- and the answer would be about the bake rather than about the
+    installer under test. Deleting them and running the installer over the top
+    asks only about this code.
+
+    The names are the mod's own. printer.cfg and printer.base.cfg are
+    FlashForge's and belong in that directory, so their presence says nothing.
+    """
+    box = upgraded
+    names = ("moonraker.conf", "moonraker-custom.conf", "timelapse.cfg")
+    box.sh("rm -f %s" % " ".join(CONFDIR + "/" + n for n in names))
+    box.sh(": > %s" % LOG)
+    run = box.sh("sh %s" % INSTALLER, timeout=INSTALL_T)
+    assert run.ok, "the installer did not run: %s" % run.text
+    log = box.file(LOG).text
+    assert "mod payload installed" in log, (
+        "nothing installed, so nothing was given the chance to write into %s. "
+        "Tail of %s:\n%s" % (CONFDIR, LOG, _tail(log)))
+    for name in names:
+        assert not box.file(CONFDIR + "/" + name).exists, (
+            "the install wrote %s/%s -- that directory is FlashForge's and a "
             "stock flash boots from it" % (CONFDIR, name))
 
 
