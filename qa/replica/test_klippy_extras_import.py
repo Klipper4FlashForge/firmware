@@ -58,30 +58,28 @@ PY = MODDIR + "/bin/python3.13"
 ENV = MODDIR + "/anvil-env.sh"
 KLIPPY = MODDIR + "/klipper/klippy"
 
-# What klippy is actually given on the command line -- etc/s6-rc/source/
-# klipper/run's PRINTER_CFG. Not printer.base.cfg: printer.cfg is the user's
-# file and the one that includes it, so starting anywhere else would walk a
-# graph the printer does not have.
+# Where the klipper service is defined. What klippy is given on the command
+# line is read out of it below rather than written here as a constant: the
+# config directory moved -- FlashForge's /usr/data/config was replaced by one
+# the mod owns and seeds from it -- and this file is about the graph the
+# INSTALLED package walks, whichever side of that move it was built on.
 #
-# And not FlashForge's /usr/data/config either. That directory is left frozen
-# at what the stock firmware last wrote, so that flashing back to stock finds
-# a config graph that still resolves; anvil-link-prog.sh seeds the directory
-# below from it once and links the mod's own configs in.
-CONFIG_DIR = "/usr/data/anvil-data/config"
-
-PRINTER_CFG = CONFIG_DIR + "/printer.cfg"
+# printer.cfg and not printer.base.cfg: printer.cfg is the user's file and the
+# one that includes it, so starting anywhere else would walk a graph the
+# printer does not have.
+KLIPPER_RUN = MODDIR + "/etc/s6-rc/source/klipper/run"
 
 _INCLUDE = re.compile(r"^\s*\[include\s+([^\]]+)\]\s*$", re.M)
 _SECTION = re.compile(r"^\s*\[([^\]]+)\]\s*$", re.M)
 
 
-def _read_graph(box, path, seen):
+def _read_graph(box, path, config_dir, seen):
     """Text of `path` and everything it includes, depth first.
 
     Klipper resolves an [include] relative to the directory of the file that
     wrote it and accepts a glob. Every config klippy reads sits directly in
-    CONFIG_DIR, so the directory is constant and the glob is expanded by the
-    shell below rather than reimplemented here.
+    `config_dir`, so the directory is constant for one machine and the glob is
+    expanded by the shell below rather than reimplemented here.
     """
     if path in seen:
         return []
@@ -96,15 +94,15 @@ def _read_graph(box, path, seen):
     out = [(path, text)]
     for spec in _INCLUDE.findall(text):
         spec = spec.strip()
-        listing = box.sh("ls -1 %s/%s 2>/dev/null" % (CONFIG_DIR, spec))
+        listing = box.sh("ls -1 %s/%s 2>/dev/null" % (config_dir, spec))
         names = [ln.strip() for ln in listing.out.splitlines() if ln.strip()]
         if not names:
             pytest.fail(
                 "[include %s] in %s matches no file in %s -- Klipper treats "
                 "that as fatal, so this printer would not start."
-                % (spec, path, CONFIG_DIR))
+                % (spec, path, config_dir))
         for name in names:
-            out.extend(_read_graph(box, name, seen))
+            out.extend(_read_graph(box, name, config_dir, seen))
     return out
 
 
@@ -120,7 +118,24 @@ def box(printer):
 
 
 @pytest.fixture(scope="module")
-def sections(box):
+def printer_cfg(box):
+    """The config file klippy is exec'd with, taken from the service that
+    execs it. That is the only thing on the machine that decides which
+    directory is live, so it is the only honest place to read it from."""
+    run = box.file(KLIPPER_RUN)
+    if not run.exists:
+        pytest.fail(
+            "no %s, so nothing says which config klippy would be started on"
+            % KLIPPER_RUN)
+    found = re.search(r"^PRINTER_CFG=(\S+)", run.text, re.M)
+    if not found:
+        pytest.fail(
+            "%s names no PRINTER_CFG:\n%s" % (KLIPPER_RUN, run.text))
+    return found.group(1)
+
+
+@pytest.fixture(scope="module")
+def sections(box, printer_cfg):
     """Every section name in the real config graph, in first-word form.
 
     `[mcu eboard]` and `[gcode_macro FOO]` are prefix sections: klippy takes
@@ -128,14 +143,15 @@ def sections(box):
     that is what is collected here.
     """
     names = set()
-    for _path, text in _read_graph(box, PRINTER_CFG, set()):
+    config_dir = printer_cfg.rsplit("/", 1)[0]
+    for _path, text in _read_graph(box, printer_cfg, config_dir, set()):
         for raw in _SECTION.findall(text):
             head = raw.split()[0].strip()
             if head:
                 names.add(head)
     assert names, (
         "no sections found anywhere under %s -- the graph walk read nothing, "
-        "so every assertion below would be vacuous" % PRINTER_CFG)
+        "so every assertion below would be vacuous" % printer_cfg)
     return sorted(names)
 
 
