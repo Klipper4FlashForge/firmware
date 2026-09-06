@@ -58,12 +58,18 @@ PY = MODDIR + "/bin/python3.13"
 ENV = MODDIR + "/anvil-env.sh"
 KLIPPY = MODDIR + "/klipper/klippy"
 
-# What klippy is actually given on the command line. Not printer.base.cfg:
-# printer.cfg is the user's file and the one that includes it, so starting
-# anywhere else would walk a graph the printer does not have.
-PRINTER_CFG = "/usr/data/config/printer.cfg"
+# What klippy is actually given on the command line -- etc/s6-rc/source/
+# klipper/run's PRINTER_CFG. Not printer.base.cfg: printer.cfg is the user's
+# file and the one that includes it, so starting anywhere else would walk a
+# graph the printer does not have.
+#
+# And not FlashForge's /usr/data/config either. That directory is left frozen
+# at what the stock firmware last wrote, so that flashing back to stock finds
+# a config graph that still resolves; anvil-link-prog.sh seeds the directory
+# below from it once and links the mod's own configs in.
+CONFIG_DIR = "/usr/data/anvil-data/config"
 
-CONFIG_DIR = "/usr/data/config"
+PRINTER_CFG = CONFIG_DIR + "/printer.cfg"
 
 _INCLUDE = re.compile(r"^\s*\[include\s+([^\]]+)\]\s*$", re.M)
 _SECTION = re.compile(r"^\s*\[([^\]]+)\]\s*$", re.M)
@@ -73,9 +79,9 @@ def _read_graph(box, path, seen):
     """Text of `path` and everything it includes, depth first.
 
     Klipper resolves an [include] relative to the directory of the file that
-    wrote it and accepts a glob. Every config on this machine sits directly in
-    /usr/data/config, so the directory is constant and the glob is expanded by
-    the shell below rather than reimplemented here.
+    wrote it and accepts a glob. Every config klippy reads sits directly in
+    CONFIG_DIR, so the directory is constant and the glob is expanded by the
+    shell below rather than reimplemented here.
     """
     if path in seen:
         return []

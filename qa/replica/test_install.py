@@ -54,6 +54,12 @@ import pytest
 pytestmark = pytest.mark.replica
 
 MODDIR = "/usr/data/anvil"
+# The live Klipper config, which is the mod's own directory and not
+# FlashForge's. STOCK_CONFIG is left exactly as the stock firmware wrote it so
+# that a printer flashed back to stock still has a config graph that resolves;
+# CONFIG_DIR is seeded from it once, by anvil-link-prog.sh.
+CONFIG_DIR = "/usr/data/anvil-data/config"
+STOCK_CONFIG = "/usr/data/config"
 FE = "/usr/prog/PROGRAM/software/firmwareExe"
 # The other two stock paths anvil-link-prog.sh owns.
 START = "/usr/prog/klipper/start.sh"
@@ -271,7 +277,7 @@ def test_the_config_include_set_is_wired_up(box):
     """printer.base.cfg must include every ff-*.cfg the package shipped, and
     each one must be there. A shipped-but-unincluded file is a feature that
     silently does nothing."""
-    base = box.file("/usr/data/config/printer.base.cfg")
+    base = box.file(CONFIG_DIR + "/printer.base.cfg")
     assert base.exists, "no printer.base.cfg -- the mod's config is not wired up"
     included = set(re.findall(r"\[include\s+(ff-[\w.-]+\.cfg)\]", base.text))
     assert included, "printer.base.cfg includes no ff-*.cfg at all"
@@ -283,7 +289,7 @@ def test_the_config_include_set_is_wired_up(box):
         "shipped but never included: %s" % sorted(shipped - included))
 
     missing = [name for name in included
-               if not box.file("/usr/data/config/" + name).exists]
+               if not box.file(CONFIG_DIR + "/" + name).exists]
     assert not missing, "included but not installed: %s" % missing
 
 
@@ -308,7 +314,7 @@ def test_every_include_resolves_not_just_ours(box):
     anvil-python-numpy at all. See qa/replica/test_klippy_extras_import.py and
     docs/notes/44-vfa-calibration.md.
     """
-    base = box.file("/usr/data/config/printer.base.cfg")
+    base = box.file(CONFIG_DIR + "/printer.base.cfg")
     assert base.exists, "no printer.base.cfg -- the mod's config is not wired up"
 
     included = set(re.findall(r"\[include\s+([^\]]+)\]", base.text))
@@ -322,21 +328,67 @@ def test_every_include_resolves_not_just_ours(box):
     # of ours is a directory of per-model chamber configs.
     missing = []
     for name in sorted(included):
-        listing = box.sh("ls -1 /usr/data/config/%s 2>/dev/null" % name)
+        listing = box.sh("ls -1 %s/%s 2>/dev/null" % (CONFIG_DIR, name))
         if not listing.out.strip():
             missing.append(name)
     assert not missing, (
         "printer.base.cfg includes %s, and no such file is in "
-        "/usr/data/config. Klipper treats a missing include as fatal, so this "
+        "%s. Klipper treats a missing include as fatal, so this "
         "printer would not start. If these are FlashForge's own configs, the "
         "replica's /usr/data was seeded without them -- see "
-        "tools/replica/printer/seed-prog.sh." % missing)
+        "tools/replica/printer/seed-prog.sh." % (missing, CONFIG_DIR))
 
 
 def test_the_user_printer_cfg_was_not_clobbered(box):
-    """The one file on the machine that is the owner's, not ours."""
-    cfg = box.file("/usr/data/config/printer.cfg")
-    assert cfg.exists, "user printer.cfg was clobbered by the install"
+    """The one file on the machine that is the owner's, not ours.
+
+    Both copies of it: the one klippy now reads, seeded from the machine's own
+    at install time, and FlashForge's, which the install must leave where it
+    found it.
+    """
+    cfg = box.file(CONFIG_DIR + "/printer.cfg")
+    assert cfg.exists, "no printer.cfg in %s -- the install seeded nothing, so "\
+        "klippy has no config to start from" % CONFIG_DIR
+
+    stock = box.file(STOCK_CONFIG + "/printer.cfg")
+    assert stock.exists, "user printer.cfg was clobbered by the install"
+
+
+def test_the_seeded_config_carries_the_machines_own_printer_cfg(box):
+    """Seeding is a COPY of what the machine had, not a shipped default.
+
+    The marker is planted in FlashForge's printer.cfg by the replica's own
+    seed-prog.sh, so a printer.cfg the mod invented would fail this while a
+    file that merely exists would pass the test above.
+    """
+    cfg = box.file(CONFIG_DIR + "/printer.cfg")
+    assert "USER-CONFIG-MUST-SURVIVE" in cfg.text, (
+        "%s/printer.cfg does not carry the machine's own marker -- the install "
+        "did not seed from %s, so every calibrated value in the SAVE_CONFIG "
+        "block was lost" % (CONFIG_DIR, STOCK_CONFIG))
+
+
+def test_nothing_of_the_mods_is_left_in_flashforges_config_directory(box):
+    """THE DOWNGRADE GATE, and the reason the directory above exists.
+
+    /usr/data is the data partition: flashing a stock package rewrites
+    /usr/prog and does not touch it. So a mod symlink left in
+    /usr/data/config outlives the mod, and a stock Klipper started on a
+    printer.base.cfg pointing into a $MODDIR that is gone does not start at
+    all -- an [include] that resolves to nothing is fatal.
+
+    Nothing of the mod's runs during a stock flash, so there is no undo to
+    write. The property has to be that the mod never wrote there.
+    """
+    links = box.sh(
+        "for f in %s/*; do [ -L \"$f\" ] || continue; "
+        "printf '%%s -> %%s\\n' \"$f\" \"$(readlink \"$f\")\"; done"
+        % STOCK_CONFIG).out.strip()
+    into_mod = [ln for ln in links.splitlines() if MODDIR + "/" in ln]
+    assert not into_mod, (
+        "%s holds symlinks into %s:\n  %s\nA printer flashed back to stock "
+        "would boot on these and Klipper would refuse to start."
+        % (STOCK_CONFIG, MODDIR, "\n  ".join(into_mod)))
 
 
 # ------------------------------------------------------------ the install log

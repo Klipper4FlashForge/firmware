@@ -213,8 +213,9 @@ if [ -n "$MODTAR" ]; then
         # ship, read or trust.
         #
         # $MODDIR is ours alone. Everything an owner edits lives in
-        # /usr/data/config -- printer.cfg, moonraker.conf, moonraker-custom.conf
-        # -- and HelixScreen's settings are in $HELIX_KEEP on /tmp by now. A
+        # /usr/data/anvil-data/config -- printer.cfg, moonraker.conf,
+        # moonraker-custom.conf -- which is outside $MODDIR and outside this
+        # wipe, and HelixScreen's settings are in $HELIX_KEEP on /tmp by now. A
         # file dropped under $MODDIR by hand does NOT survive; that is the
         # trade, and docs/notes/86-wipe-and-extract.md is the audit behind it.
         #
@@ -312,6 +313,14 @@ sync
 # moonraker.conf); printer.cfg is the user's and is never shipped, so it is
 # never a candidate.
 #
+# ONE DIRECTORY, AND IT IS NOT FLASHFORGE'S. $CONFIG_DIR is the mod's own,
+# seeded once from /usr/data/config by anvil-link-prog.sh; klippy is started
+# on the printer.cfg in it and moonraker runs with `-d /usr/data/anvil-data`,
+# so its config directory is the same one. FlashForge's /usr/data/config is
+# not written to at all: it is what a printer flashed back to stock boots
+# from, and nothing of ours runs during a stock flash to undo what was left
+# there.
+#
 # Two rules, because the two kinds of file differ in whether the user has
 # somewhere else to put a change.
 #
@@ -324,7 +333,7 @@ sync
 #
 # printer.base.cfg is on the same footing and needs no rule here: it is
 # anvil-klipper-config's, and anvil-link-prog.sh symlinks $MODDIR/config into
-# /usr/data/config, so an upgrade repoints the link rather than editing a file.
+# $CONFIG_DIR, so an upgrade repoints the link rather than editing a file.
 # printer.chamber.cfg goes the same way -- see the case below.
 #
 # moonraker.conf is ours on the same terms, and it has the same kind of seam:
@@ -333,19 +342,26 @@ sync
 # there wins over anything above. Overwriting is also how the [webcam] block and
 # the API lockdown reach a printer at all -- a copy kept back because someone
 # edited it would never receive either again.
+#
+# The path is repeated here rather than read from anvil-link-prog.sh: this
+# script also runs on a machine where the payload never extracted, and one
+# constant in two files beats a source that has to exist.
+CONFIG_DIR=/usr/data/anvil-data/config
 if [ -d $MODDIR/config ]; then
-    mkdir -p /usr/data/config
+    mkdir -p $CONFIG_DIR
     for source in $MODDIR/config/*; do
         [ -f "$source" ] || continue
         name=`basename "$source"`
-        live="/usr/data/config/$name"
+        # Klipper's and Moonraker's alike: one config directory.
+        live="$CONFIG_DIR/$name"
         case "$name" in
         moonraker-custom.conf)
             # Yours, permanently. Created once so moonraker.conf's [include]
             # resolves -- Moonraker treats an include matching no file as a
             # fatal error -- and never written again. It is the seam for every
             # Moonraker setting of your own, because moonraker.conf itself is
-            # overwritten below.
+            # overwritten below. An older release's copy came across with the
+            # seeding, so an owner's settings are already here.
             if [ -f "$live" ]; then
                 echo "config: $name kept (yours; never overwritten)"
             else
@@ -356,10 +372,9 @@ if [ -d $MODDIR/config ]; then
             ;;
         ff-*.cfg|printer.base.cfg|printer.chamber.cfg|chamber)
             # Ours, and NOT COPIED: anvil-link-prog.sh symlinks these into
-            # /usr/data/config after this loop, so the file the printer reads
-            # is the one the package owns and an `apk upgrade` changes it
-            # without a .tgz. A copy here would only put a real file in the
-            # way of the link about to replace it.
+            # $CONFIG_DIR, so the file the printer reads is the one the package
+            # owns and an `apk upgrade` changes it without a .tgz. A copy here
+            # would only put a real file in the way of the link.
             #
             # printer.chamber.cfg is not a file in $MODDIR/config: chamber/
             # holds one per model. The directory is named here so it is
@@ -368,7 +383,7 @@ if [ -d $MODDIR/config ]; then
             ;;
         esac
         cp -f "$source" "$live"
-        echo "config: $name installed"
+        echo "config: $name installed -> $live"
     done
 fi
 sync

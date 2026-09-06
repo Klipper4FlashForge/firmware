@@ -6,8 +6,36 @@ both printer models or through every real-world workflow.
 
 ## Unreleased
 
-Release preparation and documentation sweep. No firmware behavior is changed
-by this entry.
+Release preparation and documentation sweep.
+
+### Changed
+
+- Klipper's and Moonraker's config now live in Reforge's own directory,
+  `/usr/data/anvil-data/config`, seeded once on the first install with a copy
+  of `printer.cfg` and the config files beside it. FlashForge's
+  `/usr/data/config` is not written to at all from here on.
+- Moonraker's data path moved to `/usr/data/anvil-data`, which is what puts its
+  config in that directory — `moonraker.conf` and `moonraker-custom.conf` moved
+  with it, and Mainsail's config editor now shows the live files. Prints and
+  logs stay in `/usr/data/gcodes` and `/usr/data/logs`; the job-history
+  database is moved across once, by the service, while Moonraker is stopped.
+
+  On a printer coming from an older Reforge, whatever that release put in
+  `/usr/data/config` stays there — the stock files it replaced were not kept,
+  so there is nothing to restore them from. Stock's own installer force-copies
+  its `printer.base.cfg` back on every flash, which is what repairs that
+  directory.
+
+### Fixed
+
+- Flashing the stock FlashForge package back over Reforge no longer leaves the
+  printer with a Klipper config it cannot resolve. `/usr/data` is the data
+  partition, so a stock flash does not clean it: the symlinked
+  `printer.base.cfg` and the `ff-*.cfg` beside it used to outlive the mod, and
+  Klipper treats an `[include]` that points at a removed `/usr/data/anvil` as
+  fatal. Calibration and config edits made under Reforge stay in Reforge's
+  directory and come back with it; a stock flash returns the machine to the
+  `printer.cfg` it had before.
 
 ## v20260827c-melitopol — 2026-08-27
 

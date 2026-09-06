@@ -1,6 +1,8 @@
 #!/bin/sh
-# Link the configs this package ships into /usr/data/config, where Klipper
-# reads them.
+# Link the configs this package ships into /usr/data/anvil-data/config, where
+# Klipper reads them. That directory is the mod's own, seeded once from
+# FlashForge's /usr/data/config, which the mod leaves alone so that flashing
+# back to stock still finds a config graph that resolves.
 #
 # WHY THIS PACKAGE NEEDS ITS OWN. What printer.cfg includes are the ff-*.cfg
 # beside it, and anvil-link-prog.sh makes one symlink per file it finds in

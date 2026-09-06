@@ -33,7 +33,8 @@ _src="$PKG_WORK/src/moonraker-timelapse-$TIMELAPSE_VERSION"
 pkg_stage "$_src/component/timelapse.py" "moonraker/components/timelapse.py"
 
 # $MODDIR/config is a staging directory: runFirmwareExe.sh copies it into
-# /usr/data/config, where printer.base.cfg's [include timelapse.cfg] resolves.
+# /usr/data/anvil-data/config, the mod's own config directory, where
+# printer.base.cfg's [include timelapse.cfg] resolves.
 pkg_stage "$_src/klipper_macro/timelapse.cfg" "config/timelapse.cfg"
 
 pkg_ship "moonraker/components/timelapse.py" "config/timelapse.cfg"
