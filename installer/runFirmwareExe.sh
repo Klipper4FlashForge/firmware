@@ -370,15 +370,21 @@ if [ -d $MODDIR/config ]; then
             fi
             continue
             ;;
-        ff-*.cfg|printer.base.cfg|printer.chamber.cfg|chamber)
-            # Ours, and NOT COPIED: anvil-link-prog.sh symlinks these into
-            # $CONFIG_DIR, so the file the printer reads is the one the package
-            # owns and an `apk upgrade` changes it without a .tgz. A copy here
-            # would only put a real file in the way of the link.
+        *.cfg|chamber)
+            # Ours, and NOT COPIED: anvil-link-prog.sh symlinks every .cfg in
+            # $MODDIR/config into $CONFIG_DIR, so the file the printer reads is
+            # the one the package owns and an `apk upgrade` changes it without
+            # a .tgz. A copy here would only put a real file in the way of the
+            # link. The pattern matches whatever the packages ship --
+            # printer.base.cfg and the ff-*.cfg from anvil-klipper-config,
+            # timelapse.cfg from anvil-timelapse -- for the same reason the
+            # link loop does: a named list goes stale the moment a package
+            # adds one.
             #
-            # printer.chamber.cfg is not a file in $MODDIR/config: chamber/
-            # holds one per model. The directory is named here so it is
-            # skipped rather than falling through to the copy below.
+            # chamber is not a .cfg: it is the directory holding one config per
+            # model, from which the link script picks this machine's as
+            # printer.chamber.cfg. Named here so it is skipped rather than
+            # falling through to the copy below.
             continue
             ;;
         esac

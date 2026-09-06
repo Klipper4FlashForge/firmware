@@ -169,13 +169,21 @@ def test_a_second_run_does_not_re_seed(linked):
 
 def test_the_mods_configs_are_links_into_moddir(linked):
     """Symlinked, not copied: an `apk upgrade` then changes what Klipper reads
-    by replacing the file the link points at, with no .tgz and no installer."""
+    by replacing the file the link points at, with no .tgz and no installer.
+
+    EVERY .cfg IN $MODDIR/config, because that is the rule the script applies
+    rather than a list of names it knows. printer.base.cfg and the ff-*.cfg
+    are anvil-klipper-config's, timelapse.cfg is anvil-timelapse's, and the
+    next package to ship one is covered by the same glob. A named list here
+    would pass while a package's config never reached the directory -- which
+    is the failure this widening was written for.
+    """
     shipped = linked.sh(
-        "for f in %s/config/ff-*.cfg %s/config/printer.base.cfg; do "
+        "for f in %s/config/*.cfg; do "
         "[ -f \"$f\" ] || continue; basename \"$f\"; done"
-        % (MODDIR, MODDIR)).out.split()
+        % MODDIR).out.split()
     assert shipped, (
-        "the installed package shipped no ff-*.cfg in %s/config, so there was "
+        "the installed package shipped no .cfg in %s/config, so there was "
         "nothing for the script to link" % MODDIR)
 
     wrong = []

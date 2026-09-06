@@ -166,11 +166,22 @@ mkdir -p "$CONFIG_DIR"
 # the path as opened, NOT the resolved target. So a symlinked printer.base.cfg
 # finds the seeded printer.filament.cfg and friends beside it, which is what
 # lets those stay stock and unpackaged.
-for _f in "$MODDIR"/config/ff-*.cfg; do
+#
+# EVERY .cfg IN $MODDIR/config, not a list of names: printer.base.cfg and the
+# ff-*.cfg are anvil-klipper-config's, timelapse.cfg is anvil-timelapse's, and
+# a package added later ships its own the same way. Klipper needs each of them
+# beside printer.cfg -- printer.base.cfg includes them by bare name -- and a
+# named list here is a file that resolves on a fresh install, where the
+# installer copies $MODDIR/config across, and goes stale on the `apk upgrade`
+# that only runs this script. Linking whatever is there covers both.
+#
+# .cfg only. The .conf beside them are Moonraker's, and moonraker-custom.conf
+# is the owner's file to edit -- the installer copies those, once, so an edit
+# survives rather than being overwritten by a link to the package's copy.
+for _f in "$MODDIR"/config/*.cfg; do
     [ -f "$_f" ] || continue
     link_one "config/$(basename "$_f")" "$CONFIG_DIR/$(basename "$_f")"
 done
-link_one config/printer.base.cfg "$CONFIG_DIR/printer.base.cfg"
 
 # THE PRINTER SAYS WHICH MODEL IT IS, so nothing ships a marker: app_startup.sh
 # is FlashForge's own and carries MACHINE= at its top. It is restored by any
