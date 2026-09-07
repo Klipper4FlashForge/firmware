@@ -307,11 +307,13 @@ class FFPA:
         tool = gcmd.get_int('TOOL', current, minval=0,
                             maxval=EXTRUDER_COUNT - 1)
         if tool != current:
-            self._run('SELECT_TOOL T=%d' % tool)
+            # By NAME: TOOL= here is a head (pressure advance is a property
+            # of the extruder), and T= would send it through the tool map.
+            self._run('SELECT_TOOL TOOL=T%d' % tool)
             self._wait_moves()
         elif current < 0:
             raise gcmd.error(
-                "%s: no tool is mounted. SELECT_TOOL T=<0..%d> first, or"
+                "%s: no tool is mounted. SELECT_TOOL TOOL=T<0..%d> first, or"
                 " pass TOOL=." % (self.name, EXTRUDER_COUNT - 1))
         return tool
 
@@ -344,7 +346,8 @@ class FFPA:
             return
         raise gcmd.error(
             "%s: %s is at %.1f C and will not extrude (min_extrude_temp)."
-            " Heat it -- M109 S<temp> T<tool> -- or pass TEMP=."
+            " Heat it -- SET_TOOL_TEMPERATURE TOOL=T<n> TARGET=<temp> WAIT=1"
+            " -- or pass TEMP=."
             % (self.name, extruder.get_name(), status.get('temperature', 0.)))
 
     def _check_filament(self, gcmd, tool):
@@ -757,7 +760,7 @@ class FFPA:
         if temp is None:
             return None
         prev = extruder.get_status(self.reactor.monotonic()).get('target', 0.)
-        self._run('M104 S%.1f T%d' % (temp, tool))
+        self._run('SET_TOOL_TEMPERATURE TOOL=T%d TARGET=%.1f' % (tool, temp))
         self._run('TEMPERATURE_WAIT SENSOR=%s MINIMUM=%.1f MAXIMUM=%.1f'
                   % (extruder.get_name(), temp - self.min_temp_margin,
                      temp + self.min_temp_margin))
@@ -767,7 +770,8 @@ class FFPA:
         if prev_target is None:
             return
         try:
-            self._run('M104 S%.1f T%d' % (prev_target, tool))
+            self._run('SET_TOOL_TEMPERATURE TOOL=T%d TARGET=%.1f'
+                      % (tool, prev_target))
         except self.printer.command_error:
             pass
 

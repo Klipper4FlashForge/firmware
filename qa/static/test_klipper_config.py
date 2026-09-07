@@ -153,13 +153,19 @@ def _parse_params(line, cmd):
     return {k.upper(): v for k, v in (a.split("=", 1) for a in lex)}
 
 
-def _run(model, command, has_heater):
+def _run(model, command, has_heater, status=None):
     """Expand `command` until only non-macro commands remain, as klippy would.
+
+    `status` adds printer objects the macros read but that no [gcode_macro]
+    declares -- printer.ff_toolchange, printer["tool T0"] and friends. Macros
+    that branch on the tool map are unreachable without it, and the replica
+    cannot supply the real thing: klippy never reaches ready there, for want
+    of an MCU port (qa/replica/test_mcu_bringup.py).
 
     Returns (emitted commands, action_respond_info messages).
     """
     cp = _parse(model)
-    printer = {}
+    printer = dict(status or {})
     for sec in cp.sections():
         if sec.startswith("gcode_macro "):
             variables = {}
@@ -329,3 +335,183 @@ def test_the_chamber_heater_fan_matches_the_model(model):
             "would fail lookup_heater() at klippy:ready")
         assert cp.get(sec, "pin").strip() == "PD12"
         assert "heater_fan chamber_heat_fan" not in cp.sections()
+
+
+# ---------------------------------------------------------------------------
+# The tool map: the numbers a sliced file names, against the heads that
+# answer them.
+#
+# _ToolMap itself is covered in test_tool_assignment.py. What is checked here
+# is the WIRING -- that each macro consults the map in the right direction --
+# because getting a direction backwards raises nothing at all: the machine
+# heats or grabs the wrong head and the print merely comes out wrong.
+# ---------------------------------------------------------------------------
+
+def _toolchanger(physical_map=(0, 1, 2, 3), mounted=-1, docked=(0, 1, 2, 3)):
+    """printer.ff_toolchange, as a macro reads it.
+
+    physical_map is indexed by the file's NUMBER and holds the head that
+    answers it; tool_map is its inverse, indexed by head.
+    """
+    physical_map = list(physical_map)
+    tool_map = [-1] * len(physical_map)
+    for number, head in enumerate(physical_map):
+        if head >= 0:
+            tool_map[head] = number
+    return {"ff_toolchange": {
+        "physical_map": physical_map,
+        "tool_map": tool_map,
+        "physical_tools": list(range(len(physical_map))),
+        "tool_map_identity": physical_map == list(range(len(physical_map))),
+        "current_tool": mounted,
+        "docked_tools": list(docked),
+        "calibrated_tools": [0, 1, 2, 3],
+        "station_z": 3.2,
+        "print_offset_ready": True,
+        "state_ok": True,
+    }}
+
+
+REMAPPED = (0, 3, 2, 1)   # the file's T1 is head T3, and its T3 is head T1
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_m104_with_a_tool_number_goes_through_the_tool_map(model):
+    """Klipper's own M104 resolves T straight to extruder<T>, so without the
+    wrapper a remap heats the head the file names instead of the one it
+    actually selected."""
+    out, _ = _run(model, "M104 S220 T1", has_heater=False)
+    assert out == ["SET_TOOL_TEMPERATURE T=1 TARGET=220.0"]
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_m109_with_a_tool_number_asks_to_wait(model):
+    out, _ = _run(model, "M109 S220 T1", has_heater=False)
+    assert out == ["SET_TOOL_TEMPERATURE T=1 TARGET=220.0 WAIT=1"]
+
+
+@pytest.mark.parametrize("model", MODELS)
+@pytest.mark.parametrize("command", ["M104 S220", "M109 S220"])
+def test_a_temperature_with_no_tool_falls_through_to_stock(model, command):
+    """No T means the ACTIVE extruder, which is always the right answer and
+    never the map's business -- it must not become a map lookup."""
+    out, _ = _run(model, command, has_heater=False)
+    assert out == [command.replace("M104", "M104.1").replace("M109", "M109.1")]
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_a_temperature_with_no_value_turns_the_tool_off(model):
+    out, _ = _run(model, "M104 T2", has_heater=False)
+    assert out == ["SET_TOOL_TEMPERATURE T=2 TARGET=0.0"]
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_no_shipped_macro_sets_a_temperature_by_M104_T(model):
+    """THE REGRESSION THESE EXIST FOR.
+
+    Every macro in this package means a HEAD when it names a tool, and says
+    so with SET_TOOL_TEMPERATURE TOOL=T<n>. An `M104 S0 T0` put back into a
+    macro would go through the wrapper above and be read as a NUMBER, so
+    under a remap it would heat somebody else -- silently, with the print
+    merely coming out wrong. That is a property of the text we ship, so it is
+    asserted against the text rather than by expanding every macro.
+    """
+    cp = _parse(model)
+    offenders = []
+    for sec in cp.sections():
+        if not sec.startswith("gcode_macro ") or not cp.has_option(sec, "gcode"):
+            continue
+        for line in cp.get(sec, "gcode").splitlines():
+            body = line.split(";", 1)[0]
+            if re.match(r"\s*M10[49]\b", body) and re.search(r"\bT[\d{]", body):
+                offenders.append("%s: %s" % (sec, line.strip()))
+    assert not offenders, (
+        "these address a heater by M104/M109 T, which the tool map reads as "
+        "the file's number; say SET_TOOL_TEMPERATURE TOOL=T<n> instead:\n  "
+        + "\n  ".join(offenders))
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_no_shipped_macro_selects_a_tool_by_number(model):
+    """The same trap on the motion side: T= is the file's number, TOOL= is
+    the head. Our macros always mean the head."""
+    cp = _parse(model)
+    offenders = []
+    for sec in cp.sections():
+        if not sec.startswith("gcode_macro ") or not cp.has_option(sec, "gcode"):
+            continue
+        for line in cp.get(sec, "gcode").splitlines():
+            body = line.split(";", 1)[0]
+            if re.search(r"\bSELECT_TOOL\s+T=", body):
+                offenders.append("%s: %s" % (sec, line.strip()))
+    assert not offenders, (
+        "SELECT_TOOL T= takes the file's number; use TOOL=T<n> for a head:\n  "
+        + "\n  ".join(offenders))
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_preflight_gates_the_head_the_number_points_at(model):
+    """The gate compares against docked_tools/calibrated_tools, which are
+    heads, while TOOLS= arrives as the file's numbers. Here the file's T1 is
+    head T3, which IS docked -- so this passes even though head T1 is absent.
+    """
+    _run(model, "_FF_PREFLIGHT TOOL=1 TOOLS=1", has_heater=False,
+         status=_toolchanger(REMAPPED, docked=(0, 2, 3)))
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_preflight_refuses_when_the_mapped_head_is_missing(model):
+    with pytest.raises(AssertionError, match="not installed"):
+        _run(model, "_FF_PREFLIGHT TOOL=1 TOOLS=1", has_heater=False,
+             status=_toolchanger(REMAPPED, docked=(0, 2)))
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_preflight_refuses_a_number_no_tool_answers_to(model):
+    """A displaced number is refused at the gate -- before any heating,
+    homing or grab -- not mid-file as an unknown T<n>."""
+    with pytest.raises(AssertionError, match="not assigned to any tool"):
+        _run(model, "_FF_PREFLIGHT TOOL=3 TOOLS=3", has_heater=False,
+             status=_toolchanger((0, 3, 2, -1)))
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_preflight_announces_a_non_identity_map(model):
+    """A map nobody remembers setting is a wrong print with no visible
+    cause, so it is said on every job."""
+    _, info = _run(model, "_FF_PREFLIGHT TOOL=1 TOOLS=1", has_heater=False,
+                   status=_toolchanger(REMAPPED))
+    assert any("the file's T1 is tool T3" in m for m in info), info
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_preflight_is_silent_when_the_map_is_identity(model):
+    _, info = _run(model, "_FF_PREFLIGHT TOOL=1 TOOLS=1", has_heater=False,
+                   status=_toolchanger())
+    assert not any("TOOL MAP" in m for m in info), info
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_start_print_grabs_the_head_not_the_number(model):
+    out, _ = _run(model,
+                  "START_PRINT TOOL=1 NOZZLE=220 BED=0 CLEAN=0 LEVEL=0",
+                  has_heater=False, status=_toolchanger(REMAPPED))
+    assert "SELECT_TOOL TOOL=T3" in out
+    assert "SET_TOOL_TEMPERATURE TOOL=T3 TARGET=220.0" in out
+    assert not any(re.fullmatch(r"T\d", line) for line in out), (
+        "START_PRINT must not emit a bare Tn: it has already resolved the "
+        "map, and a bare Tn would resolve it a second time")
+    assert any("TOOLCHANGE_SET_PRINT_OFFSET" in line and "TOOL=T3" in line
+               for line in out), out
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_calibrate_tool_offsets_walks_every_head_under_a_map(model):
+    """Calibration is about nozzles, so it must cover all four heads even
+    when a displacement has left tool_numbers a number short -- otherwise a
+    tool is skipped and another tool's measurement lands in its section."""
+    out, _ = _run(model, "CALIBRATE_TOOL_OFFSETS", has_heater=False,
+                  status=_toolchanger((0, 3, 2, -1)))
+    for head in range(4):
+        assert "SELECT_TOOL TOOL=T%d" % head in out, out
+    assert out.count("TOOL_CALIBRATE_TOOL_OFFSET") == 4

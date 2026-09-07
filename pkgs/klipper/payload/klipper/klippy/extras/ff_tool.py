@@ -39,6 +39,13 @@ class FFTool:
                                % self.name)
         if self.index < 0:
             raise config.error("%s: tool index must be >= 0" % self.name)
+        # The number a sliced file uses for this tool, as klipper-toolchanger's
+        # [tool] tool_number. Hand-written, never autosaved: it is the BASELINE
+        # the map starts from and ASSIGN_TOOL RESET=1 returns to, not the live
+        # assignment. Upstream defaults to -1 (unnumbered); the section index
+        # is the default here because identity is this machine's baseline and a
+        # tool no `T<n>` reaches would be a footgun, not a feature.
+        self.tool_number = config.getint('tool_number', self.index, minval=0)
         # Dock position (FF_IMPORT_FIRMWARE_CONFIG) -- both or neither.
         self.dock_x = config.getfloat('dock_x', None)
         self.dock_y = config.getfloat('dock_y', None)
@@ -107,7 +114,8 @@ class FFTool:
     def get_status(self, eventtime):
         nozzle_x, nozzle_y, nozzle_z = (self.nozzle if self.nozzle
                                         else (None, None, None))
-        return {'index': self.index, 'dock_x': self.dock_x,
+        return {'index': self.index, 'tool_number': self.tool_number,
+                'dock_x': self.dock_x,
                 'dock_y': self.dock_y, 'extruder': self.extruder_name,
                 'z_adjust': self.z_adjust,
                 'calibrated': self.nozzle is not None,

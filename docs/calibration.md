@@ -35,8 +35,8 @@ it is the name HelixScreen's wizard and other UIs look for. It expands to:
 
 ```gcode
 TOOL_LOCATE_SENSOR                ; the reference, empty carriage
-{% for tool in printer.toolchanger.tool_numbers %}
-    SELECT_TOOL T={tool}
+{% for tool in printer.ff_toolchange.physical_tools %}
+    SELECT_TOOL TOOL=T{tool}      ; every head, whatever a file calls them
     TOOL_CALIBRATE_TOOL_OFFSET    ; measures whatever is mounted
 {% endfor %}
 ```
@@ -45,7 +45,7 @@ Run those by hand instead when you only want one tool:
 
 ```gcode
 TOOL_LOCATE_SENSOR       ; only if the station or bed was disturbed
-SELECT_TOOL T=2
+SELECT_TOOL TOOL=T2
 TOOL_CALIBRATE_TOOL_OFFSET
 SAVE_CONFIG
 ```
@@ -101,7 +101,7 @@ nozzle descends. A failed run leaves the previous calibration intact.
 | Message | What happened |
 |---|---|
 | `G28 left the axes unhomed (homed: '<axes>')` | Homing was auto-started and did not finish — an endstop or the toolchanger refused. Fix that first; nothing was measured. |
-| `no tool is mounted. SELECT_TOOL T=<0..3> first` | You ran the tool pass with an empty carriage. It would have measured the bare carriage and saved it as a nozzle — ~3.2 mm out, in the direction that crashes. `TOOL_LOCATE_SENSOR` is the one that wants an empty carriage. |
+| `no tool is mounted. SELECT_TOOL TOOL=T<0..3> first` | You ran the tool pass with an empty carriage. It would have measured the bare carriage and saved it as a nozzle — ~3.2 mm out, in the direction that crashes. `TOOL_LOCATE_SENSOR` is the one that wants an empty carriage. |
 | `carriage is not verifiably empty (<reason>) -- the station pass must run with no tool mounted` | `TOOL_LOCATE_SENSOR` with a tool still on, or the dock and grab sensors disagree. `<reason>` names which. |
 | `[ff_toolchange] not loaded` | Config problem, not an operator one: `ff-toolchange.cfg` is not included. |
 

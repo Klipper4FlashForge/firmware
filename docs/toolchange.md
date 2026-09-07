@@ -197,7 +197,7 @@ descends (`PLATE_CHECK=0` or `plate_check: False` skips it). Home, then:
 ```gcode
 CALIBRATE_TOOL_OFFSETS   ; or, by hand:
 TOOL_LOCATE_SENSOR       ; empty carriage, parks the mounted tool for you
-SELECT_TOOL T=0
+SELECT_TOOL TOOL=T0
 TOOL_CALIBRATE_TOOL_OFFSET   ; measures whatever is on the carriage
 SAVE_CONFIG
 ```
@@ -309,8 +309,11 @@ Fool-proofing, in rough priority order:
 for — `toolchanger` (`name`, `status`, `tool`, `tool_number`, `tool_numbers`,
 `tool_names`, `detected_tool`, `detected_tool_number`, `has_detection`) and
 `tool T0..T3` (`active`, `mounted`, `detect_state` = `mounted|absent` from the
-tool's grab sensor, `extruder`, `heater`, `fan`, `gcode_x/y/z_offset`) — and the
-commands they send: `SELECT_TOOL T=<n>` (= `T<n>`), `UNSELECT_TOOL [T=<n>]`
+tool's grab sensor, `extruder`, `heater`, `fan`, `gcode_x/y/z_offset`,
+`tool_number`) — and the
+commands they send — where `T=<n>` is a tool *number* and `TOOL=T<n>` a tool,
+which differ once `ASSIGN_TOOL` has been used ([Tool numbers](#tool-numbers)):
+`SELECT_TOOL T=<n>` (= `T<n>`), `UNSELECT_TOOL [T=<n>]`
 (= `TOOLCHANGE_PARK`), `INITIALIZE_TOOLCHANGER` (state check, no motion),
 `SET_TOOL_TEMPERATURE [T=<n>] TARGET=<t> [WAIT=1]`,
 `VERIFY_TOOL_DETECTED [T=<n>] [ASYNC=…]` and `SELECT_TOOL_ERROR [MESSAGE=…]`.
@@ -343,8 +346,8 @@ Upstream's docking-mode and tool-parameter commands (`TEST_TOOL_DOCKING`,
 `ENTER_DOCKING_MODE`, `SET_TOOL_PARAMETER` and friends) are deliberately
 absent: calibration here is `TOOL_CALIBRATE_TOOL_OFFSET` /
 `TOOL_LOCATE_SENSOR` / `TOOL_Z_ADJUST`, already tied to the factory numbers.
-`ASSIGN_TOOL` is refused — remap tools in the slicer. Nothing to enable; it is
-always on. `part_fan` in `[ff_toolchange]` is what gets reported as each
+`ASSIGN_TOOL` is supported — see [Tool numbers](#tool-numbers) below. Nothing
+to enable; it is always on. `part_fan` in `[ff_toolchange]` is what gets reported as each
 tool's fan (shared `fan_generic fanM106` on this machine). `ff_toolchange`
 itself stays (the printer-database fingerprint keys on it); the new objects
 sit alongside.
@@ -359,7 +362,7 @@ curl -s 'http://PRINTER:7125/printer/objects/query?toolchanger&tool%20T0'
 # tool T0: mounted/active false, detect_state "absent" while docked
 ```
 
-Then `SELECT_TOOL T=0` from the console and poll the query again: `status`
+Then `SELECT_TOOL TOOL=T0` from the console and poll the query again: `status`
 goes `changing`, then `ready` with `tool_number: 0` and `tool T0`
 `detect_state: "mounted"`. HelixScreen's log on connect should read
 `[Moonraker Client] Subscribing to toolchanger + 4 tool objects`, and its
@@ -376,6 +379,85 @@ dialog. Drop `pkgs/helixscreen/payload/helixscreen/config/printer_database.d/fla
 `UNLOAD_FILAMENT` and `PURGE` from [`pkgs/klipper-config/payload/config/ff-filament.cfg`](../pkgs/klipper-config/payload/config/ff-filament.cfg)
 in Settings → Macro Buttons — a user-assigned macro outranks the backend, and
 the parameter dialog picks up `TOOL` / `TEMP` / `PURGE_TEMP` from the macros.
+
+## Tool numbers
+
+A sliced file says `T1`. Which nozzle should that be?
+
+Two different things are called "tool" here, and once they can disagree the
+difference matters everywhere:
+
+- a **tool** is the hardware — its dock, its offsets, its `[ff_tool 1]`
+  section, its `tool T1` status object. It never moves. Written `T1`.
+- a **tool number** is what a file calls it. Assignable. Written `1`.
+
+They start out the same: `T0` is tool T0. `ASSIGN_TOOL` moves a number to
+another tool, so a file sliced for `T0`/`T1` prints when those filaments are
+actually in other heads — no re-slicing, no editing the file.
+
+```
+ASSIGN_TOOL TOOL=T3 N=1     # from now on the file's T1 means tool T3
+ASSIGN_TOOL RESET=1         # back to the configured map
+```
+
+`TOOLCHANGE_STATUS` prints the map every time, so a remap you set an hour ago
+cannot quietly ruin a print, and `START_PRINT` repeats it into the job log.
+
+**Which spelling means which.** This is the whole rule:
+
+| Spelling | Means | Used by |
+|---|---|---|
+| `TOOL=T3` | the **tool** | you, a UI, every macro in this package |
+| `T=1`, bare `T1`, `M104 … T1` | the **number** | the sliced file |
+
+So `SELECT_TOOL TOOL=T3` always grabs tool T3, while `SELECT_TOOL T=1` grabs
+whichever tool answers to 1. `printer["tool T3"]` is always tool T3.
+
+**Temperatures follow the map too.** A multi-tool file keeps the idle tools
+warm, so nearly every temperature command carries an explicit tool:
+
+```gcode
+M104 S180 T0        ; the tool it is about to put down
+M104 S220 T1        ; the tool it is about to pick up
+T1
+M109 S220 T1
+```
+
+Klipper's own `M104` reads `T` as an extruder index and never consults the
+toolchanger, so without help a remap would grab the right nozzle and heat the
+wrong one. `ff-toolchange.cfg` wraps `M104`/`M109` and routes a `T` through
+the map — the same thing klipper-toolchanger does in its `macros.cfg`. With no
+`T` both fall through to stock Klipper and address the active extruder, which
+is always correct.
+
+**Assigning displaces; it does not swap.** `ASSIGN_TOOL TOOL=T3 N=1` leaves
+tool T1 with no number, so bare `T1` no longer reaches it — the command says
+so when it happens. T1 is otherwise untouched: `TOOL=T1`, its dock, its runout
+sensors and its status object all work as before. To swap, assign both ways:
+
+```
+ASSIGN_TOOL TOOL=T3 N=1
+ASSIGN_TOOL TOOL=T1 N=3
+```
+
+**It does not survive a restart**, and `SAVE_CONFIG` will not store it. The
+map answers "where is the filament today", which is not a property of the
+machine. For a permanent baseline — a machine whose heads are cabled in an
+order you would rather not think about again — set `tool_number` in the
+`[ff_tool <n>]` section instead; `RESET=1` returns to that.
+
+`ASSIGN_TOOL` is refused during a toolchange, and during an unpaused print:
+the next `T<n>` would go to a different nozzle, with different offsets, in the
+middle of an object. Pause first if that is what you mean. `RESET=1` is always
+allowed.
+
+Differences from klipper-toolchanger, all deliberate: numbers are bounded to
+`0..3` (a file for this machine emits nothing else, and the bound keeps every
+status list dense); `T0..T3` stay registered for the whole session, with an
+unassigned number explaining itself rather than becoming `Unknown command`;
+`ASSIGN_TOOL` is a flat command rather than a mux one, since the `tool T<n>`
+objects here are read-only views — the wire format is identical either way;
+and `RESET=1` is ours.
 
 ## Reverse-engineering notes
 

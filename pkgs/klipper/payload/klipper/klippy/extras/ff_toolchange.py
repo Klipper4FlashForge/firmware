@@ -82,15 +82,21 @@ class _ToolchangerView:
         # reports. We keep no commanded state -- every answer is derived from
         # the dock and grab sensors -- so the two are the same by
         # construction, and both are reported for UIs that read only one.
+        # Upstream's split, and the reason `tool` and `tool_number` can
+        # disagree now: the NAME is the tool itself and matches the object
+        # name a UI subscribes to, while the NUMBER is the assignment.
         name = 'T%d' % mounted if mounted >= 0 else None
+        number = own['current_number']
+        tool_map = self.toolchanger.tool_map
         return {'name': 'toolchanger',
                 'status': status,
-                'tool_number': mounted,
-                'tool_numbers': list(range(EXTRUDER_COUNT)),
-                'tool_names': ['T%d' % i for i in range(EXTRUDER_COUNT)],
+                'tool_number': number,
+                'tool_numbers': tool_map.numbers(),
+                'tool_names': tool_map.names(),
                 'tool': name,
                 'detected_tool': name,
-                'detected_tool_number': mounted,
+                'detected_tool_number': number,
+                'tool_map': tool_map.as_list(),
                 'has_detection': True,
                 'state_reason': own['state_reason'],
                 # The print-scoped Z the tool frame is carrying on top of
@@ -120,7 +126,12 @@ class _ToolView:
                       else 'absent')
         except (FFToolchangeError, IndexError):
             detect = 'unavailable'
-        return {'tool_number': self.index,
+        # tool_number is upstream's: the assignable number, -1 when this tool
+        # answers to none. physical_number is what tool_number used to mean
+        # and never moves; `name` stays physical because it must keep matching
+        # this object's own name.
+        return {'tool_number': toolchanger.tool_map.number_of(self.index),
+                'physical_number': self.index,
                 'name': 'T%d' % self.index,
                 'toolchanger': 'toolchanger',
                 'active': mounted == self.index,
@@ -207,6 +218,111 @@ class _ToolTransform:
                 base[2] - offsets[2]] + list(base[3:])
 
 
+class _ToolMap:
+    """Which physical tool answers each number a G-code file names.
+
+    Two vocabularies meet here and must not be confused. A PHYSICAL tool is
+    the hardware: 0..3, the [ff_tool <n>] section, the dock switch, the
+    offsets, the error-code addend, the `tool T<n>` status object. It never
+    moves. A NUMBER is what a sliced file says -- bare `T1`, `M104 S220 T1`
+    -- and ASSIGN_TOOL points it at whichever tool holds the right filament,
+    so a file sliced for T0/T1 prints without being sliced again.
+
+    Assigning DISPLACES rather than swaps, as klipper-toolchanger does: the
+    tool that held the number is left unnumbered, not handed the assigner's
+    old number. Moving a second tool is not what the operator typed. A
+    displaced tool is still entirely reachable -- TOOL=T1, its dock, its
+    runout sensors, its status object -- and only bare `T1` stops resolving,
+    which reports itself rather than becoming an unknown command.
+
+    Numbers are bounded to 0..count-1. Upstream allows any number because it
+    also serves MMUs with a variable tool count; here the bound is what keeps
+    inverse() a dense list, keeps _FF_PREFLIGHT's range check honest and
+    keeps ff_print.py's ^T([0-3]) file regex complete.
+
+    Deliberately free of printer, config and gcode. The replica cannot reach
+    a klippy ready phase -- no MCU ports, see qa/replica/test_mcu_bringup.py
+    -- so a map that needed a live printer to exercise would ship untested.
+    """
+
+    UNSET = -1
+
+    def __init__(self, baseline):
+        self.count = len(baseline)
+        self.baseline = list(baseline)
+        self._number = list(baseline)
+
+    def reset(self):
+        """Back to the configured baseline, i.e. [ff_tool <n>].tool_number."""
+        self._number = list(self.baseline)
+
+    def assign(self, physical, number):
+        """Give `physical` this number; returns the tool displaced, or -1."""
+        displaced = self.physical_of(number)
+        if displaced == physical:
+            return self.UNSET
+        if displaced != self.UNSET:
+            self._number[displaced] = self.UNSET
+        self._number[physical] = number
+        return displaced
+
+    def number_of(self, physical):
+        return self._number[physical]
+
+    def physical_of(self, number):
+        if number is None or number < 0:
+            return self.UNSET
+        try:
+            return self._number.index(number)
+        except ValueError:
+            return self.UNSET
+
+    def is_identity(self):
+        """Against TRUE identity, not the configured baseline -- a machine
+        that configures a permanent remap earns the same standing notice."""
+        return self._number == list(range(self.count))
+
+    def numbers(self):
+        """Assigned numbers, sorted. klipper-toolchanger's tool_numbers."""
+        return sorted(n for n in self._number if n != self.UNSET)
+
+    def names(self):
+        """Physical names, PARALLEL to numbers() -- upstream's invariant."""
+        return ['T%d' % self.physical_of(n) for n in self.numbers()]
+
+    def as_list(self):
+        """Index = physical tool, value = its number (-1 unnumbered)."""
+        return list(self._number)
+
+    def inverse(self):
+        """Index = number, value = the physical tool (-1 unassigned)."""
+        return [self.physical_of(n) for n in range(self.count)]
+
+    def describe(self):
+        """The lines TOOLCHANGE_STATUS and ASSIGN_TOOL both print."""
+        if self.is_identity():
+            return ["tool map: identity (the file's T<n> is tool T<n>)"]
+        lines = ["! TOOL MAP IS NOT IDENTITY -- the file's T<n> is not the"
+                 " tool it names:"]
+        for number in range(self.count):
+            physical = self.physical_of(number)
+            if physical == self.UNSET:
+                lines.append("    file T%d  ->  NOTHING -- bare T%d is"
+                             " refused" % (number, number))
+            else:
+                lines.append("    file T%d  ->  tool T%d%s"
+                             % (number, physical,
+                                "" if physical == number else "   <- assigned"))
+        unnumbered = [p for p in range(self.count)
+                      if self._number[p] == self.UNSET]
+        for physical in unnumbered:
+            lines.append("    tool T%d has no number -- reach it with"
+                         " TOOL=T%d" % (physical, physical))
+        lines.append("  Runtime only: a klippy restart or ASSIGN_TOOL RESET=1"
+                     " restores the configured map.")
+        return lines
+
+
 class FFToolchangeError(Exception):
     """A toolchange step failed or the sensors report an unusable state."""
 
@@ -230,6 +346,29 @@ class FFToolchange:
                     "%s: section [ff_tool %d] is required (an empty"
                     " section is enough; FF_IMPORT_FIRMWARE_CONFIG fills"
                     " in dock and nozzle data)" % (self.name, i))
+        # Which physical tool answers each number a file names. Seeded from
+        # the hand-written [ff_tool <n>] tool_number values, moved at runtime
+        # by ASSIGN_TOOL, never persisted.
+        baseline = [tool.tool_number for tool in self.tools]
+        for number in set(baseline):
+            holders = [i for i, n in enumerate(baseline) if n == number]
+            if len(holders) > 1:
+                raise config.error(
+                    "%s: tool_number %d is claimed by %s -- each number may"
+                    " name only one tool"
+                    % (self.name, number,
+                       " and ".join("[ff_tool %d]" % i for i in holders)))
+        for i, number in enumerate(baseline):
+            if number >= EXTRUDER_COUNT:
+                raise config.error(
+                    "%s: [ff_tool %d] tool_number %d is out of range 0..%d;"
+                    " a file for this machine only ever emits T0..T%d"
+                    % (self.name, i, number, EXTRUDER_COUNT - 1,
+                       EXTRUDER_COUNT - 1))
+        self.tool_map = _ToolMap(baseline)
+        # T<n> names this module registered itself, so that a user's own
+        # [gcode_macro T5] is never displaced -- upstream's rule.
+        self.owned_numbers = set()
         # testConfig()+8 grabOffset in the app.
         self.x_correction = config.getfloat('x_correction', 0.0)
         # degC-to-mm thermal term of the print-start Z offset
@@ -343,9 +482,7 @@ class FFToolchange:
 
         self.gcode.register_command(
             'TOOLCHANGE', self.cmd_TOOLCHANGE, desc=self.cmd_TOOLCHANGE_help)
-        for i in range(EXTRUDER_COUNT):
-            self.gcode.register_command(
-                'T%d' % i, self._make_tn(i), desc="Select tool %d" % i)
+        # T<n> is registered at connect, not here -- see _register_t_commands.
         self.gcode.register_command(
             'TOOLCHANGE_STATUS', self.cmd_TOOLCHANGE_STATUS,
             desc=self.cmd_TOOLCHANGE_STATUS_help)
@@ -467,6 +604,7 @@ class FFToolchange:
         # was not visible to the refresh_offsets() in __init__ -- re-derive
         # now that every object exists, or Z would stay in the relative form.
         self.refresh_offsets()
+        self._register_t_commands()
         # Insert the per-tool frame under gcode_move at connect, not config
         # time, so everything registering a transform in its own __init__
         # (bed_mesh, skew_correction) is already installed and ends up BELOW
@@ -585,10 +723,52 @@ class FFToolchange:
                 " FF_IMPORT_FIRMWARE_CONFIG once)"
                 " and SAVE_CONFIG." % ", ".join("T%d" % i for i in missing))
 
-    def _make_tn(self, index):
+    def _register_t_commands(self):
+        """Claim T0..T<n-1>, once, at connect.
+
+        Every name is registered ONCE and kept, and the handler resolves the
+        map when it runs. klipper-toolchanger instead re-registers T<n> on
+        each assignment, which suits a changer whose tool count is a config
+        question; here the count is fixed at four and numbers are bounded, so
+        the set of names is constant. It also fails better: an unassigned
+        number explains itself and names ASSIGN_TOOL, where a name that came
+        and went mid-session would surface as "Unknown command: T1" against a
+        file that looks perfectly correct.
+
+        Connect rather than __init__ so that every [gcode_macro T<n>] in the
+        config has already registered -- upstream's rule is to leave a command
+        we do not own alone, and only at connect is "already there" knowable.
+        """
+        for number in range(EXTRUDER_COUNT):
+            name = 'T%d' % number
+            existing = self.gcode.register_command(name, None)
+            if existing is not None:
+                self.gcode.register_command(name, existing)
+                logging.info("%s: %s is already defined -- leaving it alone;"
+                             " this module will not answer it", self.name, name)
+                continue
+            self.gcode.register_command(name, self._make_tn(number),
+                                        desc="Select the tool assigned to"
+                                             " number %d" % number)
+            self.owned_numbers.add(number)
+
+    def _make_tn(self, number):
         def handler(gcmd):
-            self._toolchange(gcmd, index)
+            self._toolchange(gcmd, self._physical(gcmd, number))
         return handler
+
+    def _physical(self, gcmd, number):
+        """A number as a file means it -> the tool that answers it."""
+        if not 0 <= number < EXTRUDER_COUNT:
+            raise gcmd.error("T must be 0..%d, got %d"
+                             % (EXTRUDER_COUNT - 1, number))
+        physical = self.tool_map.physical_of(number)
+        if physical == _ToolMap.UNSET:
+            raise gcmd.error(
+                "T%d is not assigned to any tool. %s Assign one with"
+                " ASSIGN_TOOL TOOL=T<n> N=%d, or ASSIGN_TOOL RESET=1."
+                % (number, " ".join(self.tool_map.describe()), number))
+        return physical
 
     def _run(self, script):
         self.gcode.run_script_from_command(script)
@@ -1060,10 +1240,16 @@ class FFToolchange:
 
     # ---------------- commands ----------------
 
-    cmd_TOOLCHANGE_help = "Change to tool INDEX=0..3"
+    cmd_TOOLCHANGE_help = ("Change tool. INDEX=<number> | T=<number> is the"
+                           " number a file names; TOOL=T<n> is the tool")
 
     def cmd_TOOLCHANGE(self, gcmd):
-        self._toolchange(gcmd, gcmd.get_int('INDEX'))
+        """INDEX= is the long spelling of a bare T<n>, so it takes a NUMBER
+        and goes through the map. TOOL=T<n> addresses a head directly."""
+        tool = self._physical_arg(gcmd, required=False)
+        if tool is None:
+            tool = self._physical(gcmd, gcmd.get_int('INDEX'))
+        self._toolchange(gcmd, tool)
 
     def _toolchange(self, gcmd, tool):
         if tool < 0 or tool >= EXTRUDER_COUNT:
@@ -1248,7 +1434,9 @@ class FFToolchange:
         nozzle = gcmd.get_float('NOZZLE')
         bed = gcmd.get_float('BED', 0.)
         layer = gcmd.get_float('LAYER', 0.)
-        tool = gcmd.get_int('TOOL', -1, minval=-1, maxval=EXTRUDER_COUNT - 1)
+        tool = self._physical_arg(gcmd, required=False)
+        if tool is None:
+            tool = -1
         if tool < 0:
             current, _reason = self._current_tool_or_none()
             tool = current if current is not None and current >= 0 else 0
@@ -1305,7 +1493,7 @@ class FFToolchange:
         SET_GCODE_OFFSET Z_ADJUST without MOVE=1, the frame shifts and the
         next move lands in it, which is what babystepping into a live print
         has to do."""
-        tool = gcmd.get_int('TOOL', minval=0, maxval=EXTRUDER_COUNT - 1)
+        tool = self._physical_arg(gcmd)
         adjust = gcmd.get_float('ADJUST', None)
         value = gcmd.get_float('VALUE', None)
         save = gcmd.get_int('SAVE', 0, minval=0, maxval=1)
@@ -1329,38 +1517,54 @@ class FFToolchange:
 
     # ---------------- klipper-toolchanger command aliases ----------------
 
-    def _tool_arg(self, gcmd, required=True):
-        """klipper-toolchanger accepts T=<number> or TOOL=<name>."""
-        tool = gcmd.get_int('T', None)
-        if tool is None:
-            name = gcmd.get('TOOL', None)
-            if name is not None:
-                name = name.strip()
-                if name.upper().startswith('T') and name[1:].isdigit():
-                    tool = int(name[1:])
-                else:
-                    raise gcmd.error("TOOL must be T0..T%d, got '%s'"
-                                     % (EXTRUDER_COUNT - 1, name))
-        if tool is None:
+    def _physical_arg(self, gcmd, required=True):
+        """Resolve either spelling to a PHYSICAL tool.
+
+        klipper-toolchanger's two forms mean different things, and once a
+        number can be reassigned the difference is the whole point:
+
+            TOOL=T3   the tool ITSELF, by its permanent name. What a person
+                      or a UI types, because they mean that head.
+            T=1       the NUMBER, through the map. What a file says.
+
+        Everything below _toolchange is physical, so both land here and both
+        leave as a physical index. Under an identity map they agree, which is
+        what makes this module's own callers safe to convert ahead of the
+        feature."""
+        number = gcmd.get_int('T', None)
+        name = gcmd.get('TOOL', None)
+        if number is not None and name is not None:
+            raise gcmd.error("give T=<number> or TOOL=T<n>, not both")
+        if name is not None:
+            name = name.strip()
+            bare = name[1:] if name.upper().startswith('T') else name
+            if not bare.isdigit():
+                raise gcmd.error("TOOL names a tool: T0..T%d, got '%s'"
+                                 % (EXTRUDER_COUNT - 1, name))
+            tool = int(bare)
+            if not 0 <= tool < EXTRUDER_COUNT:
+                raise gcmd.error("TOOL must be T0..T%d, got '%s'"
+                                 % (EXTRUDER_COUNT - 1, name))
+            return tool
+        if number is None:
             if required:
-                raise gcmd.error("T=<n> or TOOL=T<n> is required")
+                raise gcmd.error("TOOL=T<n> (a tool) or T=<n> (a number)"
+                                 " is required")
             return None
-        if not 0 <= tool < EXTRUDER_COUNT:
-            raise gcmd.error("T must be 0..%d" % (EXTRUDER_COUNT - 1))
-        return tool
+        return self._physical(gcmd, number)
 
     cmd_SELECT_TOOL_help = ("Select a tool (T=<n> | TOOL=T<n>); same as"
                             " T<n>. RESTORE_AXIS=<xyz> returns the toolhead")
 
     def cmd_SELECT_TOOL(self, gcmd):
-        self._toolchange(gcmd, self._tool_arg(gcmd))
+        self._toolchange(gcmd, self._physical_arg(gcmd))
 
     cmd_UNSELECT_TOOL_help = ("Dock the mounted tool; same as"
                               " TOOLCHANGE_PARK. RESTORE_AXIS=<xyz> returns"
                               " the toolhead")
 
     def cmd_UNSELECT_TOOL(self, gcmd):
-        tool = self._tool_arg(gcmd, required=False)
+        tool = self._physical_arg(gcmd, required=False)
         if tool is not None:
             mounted, _reason = self._current_tool_or_none()
             if mounted != tool:
@@ -1392,13 +1596,61 @@ class FFToolchange:
                           % (mounted, reason, frame,
                              "" if before == after else " -- re-applied"))
 
-    cmd_ASSIGN_TOOL_help = "Not supported on this toolchanger"
+    cmd_ASSIGN_TOOL_help = ("Point a number a file uses at a tool"
+                            " (TOOL=T<n> N=<number>), or RESET=1 to restore"
+                            " the configured map. Runtime only")
 
     def cmd_ASSIGN_TOOL(self, gcmd):
-        raise gcmd.error(
-            "ASSIGN_TOOL: logical-to-physical tool remapping is not supported"
-            " here; remap in the slicer (the fork's"
-            " SDCARD_SET_GCODE_EX_USED_BASE table is the future home)")
+        """klipper-toolchanger's ASSIGN_TOOL TOOL=<name> N=<number>.
+
+        Upstream registers this as a mux command keyed on each tool object's
+        name. Ours is flat, because the `tool T<n>` objects here are
+        read-only status views with no command surface of their own -- on the
+        wire the two are the same thing, and a UI sending upstream's spelling
+        reaches this.
+
+        Nothing is persisted, deliberately. The map answers "where is the
+        filament today", which is not a property of the machine, and
+        SAVE_CONFIG restarts klippy -- so a mid-session remap could not use it
+        anyway. A restart is the reset.
+        """
+        if gcmd.get_int('RESET', 0):
+            self.tool_map.reset()
+            self._report_map(gcmd, "tool map reset")
+            return
+        if self.changing:
+            raise gcmd.error("ASSIGN_TOOL: a toolchange is running")
+        # Mid-print the next T<n> would go to a different head, with different
+        # offsets, in the middle of an object. Paused is fine -- that is when
+        # somebody swaps a spool and wants the file pointed at another tool.
+        print_stats = self.printer.lookup_object('print_stats', None)
+        pause_resume = self.printer.lookup_object('pause_resume', None)
+        if print_stats is not None:
+            state = print_stats.get_status(
+                self.reactor.monotonic()).get('state')
+            paused = (pause_resume is not None and pause_resume.get_status(
+                self.reactor.monotonic()).get('is_paused'))
+            if state == 'printing' and not paused:
+                raise gcmd.error(
+                    "ASSIGN_TOOL: a print is running. Remapping now would"
+                    " send the next T<n> to a different nozzle mid-object."
+                    " PAUSE first if that is what you mean.")
+        tool = self._physical_arg(gcmd)
+        number = gcmd.get_int('N', minval=0, maxval=EXTRUDER_COUNT - 1)
+        if self.tool_map.number_of(tool) == number:
+            self._report_map(gcmd, "T%d already answers to %d" % (tool, number))
+            return
+        displaced = self.tool_map.assign(tool, number)
+        headline = "T%d now answers to %d" % (tool, number)
+        if displaced != _ToolMap.UNSET:
+            headline += ("; T%d has no number and bare T%d no longer reaches"
+                         " it -- give it one, or ASSIGN_TOOL RESET=1"
+                         % (displaced, displaced))
+        self._report_map(gcmd, headline)
+
+    def _report_map(self, gcmd, headline):
+        gcmd.respond_info("%s\n%s"
+                          % (headline, "\n".join(self.tool_map.describe())))
 
     cmd_SET_TOOL_TEMPERATURE_help = (
         "Set a tool's hotend target (T=<n> | TOOL=T<n>, default the mounted"
@@ -1408,7 +1660,7 @@ class FFToolchange:
         """Upstream addresses a tool by name; we address the extruder behind
         it. Naming the tool rather than the extruder is the whole point --
         a UI knows it is heating T2, not that T2 means [extruder2]."""
-        tool = self._tool_arg(gcmd, required=False)
+        tool = self._physical_arg(gcmd, required=False)
         if tool is None:
             tool, reason = self._current_tool_or_none()
             if tool is None or tool < 0:
@@ -1435,7 +1687,7 @@ class FFToolchange:
         motion queue; ours reads switches after a wait_moves, which costs
         nothing to do inline."""
         gcmd.get_int('ASYNC', 0)
-        expect = self._tool_arg(gcmd, required=False)
+        expect = self._physical_arg(gcmd, required=False)
         self._wait_moves()
         mounted, reason = self._current_tool_or_none()
         if mounted is None:
@@ -1464,7 +1716,9 @@ class FFToolchange:
                               " (and disable the others); TOOL= overrides")
 
     def cmd_FF_RUNOUT_ARM(self, gcmd):
-        tool = gcmd.get_int('TOOL', -1)
+        tool = self._physical_arg(gcmd, required=False)
+        if tool is None:
+            tool = -1
         if tool < 0:
             tool, reason = self._current_tool_or_none()
             if tool is None or tool < 0:
@@ -1496,6 +1750,11 @@ class FFToolchange:
         else:
             lines = ["current_tool=%d  (%s)" % (tool, reason)]
         lines.append("  (derived from the dock sensors; nothing is stored)")
+        # First thing after the tool, because everything below it is printed
+        # in HEADS and a reader who does not know the map is misreading all
+        # of it. Said even when it is the identity, so its presence is a
+        # habit and its absence is noticeable.
+        lines.extend("  " + line for line in self.tool_map.describe())
         applied = self.gcode_transform.tool
         if applied is None:
             lines.append("  frame applied: NONE -- raw machine coordinates."
@@ -1621,7 +1880,19 @@ class FFToolchange:
                 # Tool whose runout/clog sensors are enabled (-1 = none)
                 # and those sensors' object names.
                 'runout_armed': self.armed_tool,
-                'runout_sensors': self._armed_sensors()}
+                'runout_sensors': self._armed_sensors(),
+                # The tool map. current_tool above stays PHYSICAL -- it is the
+                # head on the carriage, which is what all fourteen of its
+                # readers mean -- so the logical answer is a separate key
+                # rather than a change of meaning nobody would notice.
+                'current_number': (self.tool_map.number_of(tool)
+                                   if tool is not None and tool >= 0 else -1),
+                'tool_map': self.tool_map.as_list(),
+                'physical_map': self.tool_map.inverse(),
+                'tool_map_identity': self.tool_map.is_identity(),
+                # Always all four, for loops that must cover every head
+                # whatever the map says (CALIBRATE_TOOL_OFFSETS).
+                'physical_tools': list(range(EXTRUDER_COUNT))}
 
 
 def load_config(config):

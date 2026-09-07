@@ -80,7 +80,9 @@ distance), `TMCHOME_X_CY`/`TMCHOME_Y_CY` (stallguard homing cycle, reports posit
 
 Virtual SD / print pipeline: `SDCARD_SET_CHANNEL CHANNEL=n`,
 `SDCARD_SET_GCODE_EX_USED_BASE/CHANGED INDEX=i EXTRUDER=Tn` (slicer-tool→physical-tool
-remap), `SDCARD_SET_NEED_CHECK_EX`, `SDCARD_NO_FILAMENT_CHECK_EX`,
+remap; the mod does this as klipper-toolchanger's `ASSIGN_TOOL` instead — see
+docs/toolchange.md "Tool numbers"), `SDCARD_SET_NEED_CHECK_EX`,
+`SDCARD_NO_FILAMENT_CHECK_EX`,
 `SDCARD_SET_PAUSE_STATE`, `SDCARD_CLEAR_REFUELLING`.
 
 Fans/PA: `SET_FAN_M106[P2] ADJUSTED=.. FACTOR=..` (UI fan override scaling),
