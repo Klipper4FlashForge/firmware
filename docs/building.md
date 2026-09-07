@@ -133,17 +133,20 @@ signing key — so it is fetch, unpack, pack. Output goes to `work/recovery/`
 rather than `work/out/`, because `make build` wipes that directory and the
 replica lane treats the newest `.tgz` in it as the mod under test.
 
-**It is published from another repository**, not from this one:
-[Klipper4FlashForge/stock-recovery](https://github.com/Klipper4FlashForge/stock-recovery).
-Its workflow checks this repo out at a ref you name, builds both models with
-the commands above, and releases them there. Nothing about that needs a token:
-this repo is public, so the recovery repo reads it with the checkout action and
-publishes to itself with its own `GITHUB_TOKEN`.
+**It lives on a branch and is published from another repository.** The sources
+are on `restore-stock-klipper-hooks` here and are deliberately not merged to
+master: they repair printers running releases that are already out, and nothing
+in them belongs in the next firmware. The releases are at
+[Klipper4FlashForge/stock-recovery](https://github.com/Klipper4FlashForge/stock-recovery),
+whose workflow checks that branch out, builds both models with the commands
+above, and publishes there. Nothing about that needs a token: this repo is
+public, so it reads it with the checkout action and publishes to itself with
+its own `GITHUB_TOKEN`.
 
-Keeping it separate is what stops a repair for owners of old releases being
-buried among firmware releases they must not flash to get it. A `recovery-v*`
-tag pushed there is the whole release procedure; the sources stay here, and the
-release notes record the commit they were built from.
+Keeping the releases separate is what stops a repair for owners of old releases
+being buried among firmware releases they must not flash to get it. A
+`recovery-v*` tag pushed there is the whole release procedure, and because a
+branch moves, each release records the commit it was built from.
 
 That job runs `make qa-scripts` — the parse, dialect and `$MODDIR`-guard
 checks, which is what applies to a package whose only executable is one shell

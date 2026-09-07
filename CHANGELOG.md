@@ -23,9 +23,10 @@ by this entry.
   [Going back to stock](docs/going-back-to-stock.md). It is built and
   published from
   [Klipper4FlashForge/stock-recovery](https://github.com/Klipper4FlashForge/stock-recovery),
-  which checks this repo out and releases there, so a repair for owners of old
-  releases is not buried among firmware releases they must not flash to get
-  it.
+  which checks this branch out and releases there, so a repair for owners of
+  old releases is not buried among firmware releases they must not flash to
+  get it. The branch is not merged to master: it repairs printers running
+  releases that are already out.
 
 ### Fixed
 
