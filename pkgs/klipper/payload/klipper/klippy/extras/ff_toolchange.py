@@ -1596,13 +1596,61 @@ class FFToolchange:
                           % (mounted, reason, frame,
                              "" if before == after else " -- re-applied"))
 
-    cmd_ASSIGN_TOOL_help = "Not supported on this toolchanger"
+    cmd_ASSIGN_TOOL_help = ("Point a number a file uses at a tool"
+                            " (TOOL=T<n> N=<number>), or RESET=1 to restore"
+                            " the configured map. Runtime only")
 
     def cmd_ASSIGN_TOOL(self, gcmd):
-        raise gcmd.error(
-            "ASSIGN_TOOL: logical-to-physical tool remapping is not supported"
-            " here; remap in the slicer (the fork's"
-            " SDCARD_SET_GCODE_EX_USED_BASE table is the future home)")
+        """klipper-toolchanger's ASSIGN_TOOL TOOL=<name> N=<number>.
+
+        Upstream registers this as a mux command keyed on each tool object's
+        name. Ours is flat, because the `tool T<n>` objects here are
+        read-only status views with no command surface of their own -- on the
+        wire the two are the same thing, and a UI sending upstream's spelling
+        reaches this.
+
+        Nothing is persisted, deliberately. The map answers "where is the
+        filament today", which is not a property of the machine, and
+        SAVE_CONFIG restarts klippy -- so a mid-session remap could not use it
+        anyway. A restart is the reset.
+        """
+        if gcmd.get_int('RESET', 0):
+            self.tool_map.reset()
+            self._report_map(gcmd, "tool map reset")
+            return
+        if self.changing:
+            raise gcmd.error("ASSIGN_TOOL: a toolchange is running")
+        # Mid-print the next T<n> would go to a different head, with different
+        # offsets, in the middle of an object. Paused is fine -- that is when
+        # somebody swaps a spool and wants the file pointed at another tool.
+        print_stats = self.printer.lookup_object('print_stats', None)
+        pause_resume = self.printer.lookup_object('pause_resume', None)
+        if print_stats is not None:
+            state = print_stats.get_status(
+                self.reactor.monotonic()).get('state')
+            paused = (pause_resume is not None and pause_resume.get_status(
+                self.reactor.monotonic()).get('is_paused'))
+            if state == 'printing' and not paused:
+                raise gcmd.error(
+                    "ASSIGN_TOOL: a print is running. Remapping now would"
+                    " send the next T<n> to a different nozzle mid-object."
+                    " PAUSE first if that is what you mean.")
+        tool = self._physical_arg(gcmd)
+        number = gcmd.get_int('N', minval=0, maxval=EXTRUDER_COUNT - 1)
+        if self.tool_map.number_of(tool) == number:
+            self._report_map(gcmd, "T%d already answers to %d" % (tool, number))
+            return
+        displaced = self.tool_map.assign(tool, number)
+        headline = "T%d now answers to %d" % (tool, number)
+        if displaced != _ToolMap.UNSET:
+            headline += ("; T%d has no number and bare T%d no longer reaches"
+                         " it -- give it one, or ASSIGN_TOOL RESET=1"
+                         % (displaced, displaced))
+        self._report_map(gcmd, headline)
+
+    def _report_map(self, gcmd, headline):
+        gcmd.respond_info("%s\n%s"
+                          % (headline, "\n".join(self.tool_map.describe())))
 
     cmd_SET_TOOL_TEMPERATURE_help = (
         "Set a tool's hotend target (T=<n> | TOOL=T<n>, default the mounted"
@@ -1702,6 +1750,11 @@ class FFToolchange:
         else:
             lines = ["current_tool=%d  (%s)" % (tool, reason)]
         lines.append("  (derived from the dock sensors; nothing is stored)")
+        # First thing after the tool, because everything below it is printed
+        # in HEADS and a reader who does not know the map is misreading all
+        # of it. Said even when it is the identity, so its presence is a
+        # habit and its absence is noticeable.
+        lines.extend("  " + line for line in self.tool_map.describe())
         applied = self.gcode_transform.tool
         if applied is None:
             lines.append("  frame applied: NONE -- raw machine coordinates."

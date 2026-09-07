@@ -28,7 +28,7 @@ from qa.lib.paths import ROOT
 EXTRUDER_COUNT = 4
 
 
-def _load_tool_map():
+def _load_module():
     """Import ff_toolchange off the shipped payload, with no klippy present.
 
     The module imports only contextlib and logging at module level, so it
@@ -41,11 +41,12 @@ def _load_tool_map():
     spec = importlib.util.spec_from_file_location("ff_toolchange", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module._ToolMap
+    return module
 
 
 pytestmark = pytest.mark.static
-_ToolMap = _load_tool_map()
+_ff = _load_module()
+_ToolMap = _ff._ToolMap
 IDENTITY = list(range(EXTRUDER_COUNT))
 UNSET = -1
 
@@ -181,3 +182,159 @@ def test_describe_flags_a_number_nothing_answers_to():
     m = _map()
     m.assign(3, 1)
     assert any("file T3  ->  NOTHING" in line for line in m.describe())
+
+
+# ---------------------------------------------------------------------------
+# ASSIGN_TOOL itself. The command is exercised against the shipped method,
+# with the handful of klippy objects it touches stubbed -- the guards are the
+# safety-relevant half and the replica cannot reach them.
+# ---------------------------------------------------------------------------
+
+class _CommandError(Exception):
+    pass
+
+
+class _Gcmd:
+    """Just enough of Klipper's GCodeCommand for these paths."""
+
+    _MISSING = object()
+
+    def __init__(self, **params):
+        self.params = {k: str(v) for k, v in params.items()}
+        self.responses = []
+
+    def get(self, name, default=_MISSING):
+        if name in self.params:
+            return self.params[name]
+        if default is self._MISSING:
+            raise _CommandError("missing %s" % name)
+        return default
+
+    def get_int(self, name, default=_MISSING, minval=None, maxval=None):
+        if name not in self.params:
+            if default is self._MISSING:
+                raise _CommandError("missing %s" % name)
+            return default
+        value = int(self.params[name])
+        if minval is not None and value < minval:
+            raise _CommandError("%s below %s" % (name, minval))
+        if maxval is not None and value > maxval:
+            raise _CommandError("%s above %s" % (name, maxval))
+        return value
+
+    def respond_info(self, message):
+        self.responses.append(message)
+
+    def error(self, message):
+        return _CommandError(message)
+
+
+class _Status:
+    def __init__(self, status):
+        self._status = status
+
+    def get_status(self, _eventtime):
+        return self._status
+
+
+class _Printer:
+    def __init__(self, objects):
+        self._objects = objects
+
+    def lookup_object(self, name, default=None):
+        return self._objects.get(name, default)
+
+
+class _Reactor:
+    def monotonic(self):
+        return 0.0
+
+
+def _changer(baseline=None, changing=False, printing=False, paused=False):
+    """A FFToolchange with only what cmd_ASSIGN_TOOL touches."""
+    changer = _ff.FFToolchange.__new__(_ff.FFToolchange)
+    changer.tool_map = _map(baseline)
+    changer.changing = changing
+    changer.reactor = _Reactor()
+    changer.printer = _Printer({
+        'print_stats': _Status({'state': 'printing' if printing else 'ready'}),
+        'pause_resume': _Status({'is_paused': paused}),
+    })
+    return changer
+
+
+def test_assign_tool_points_a_number_at_a_tool():
+    changer, gcmd = _changer(), _Gcmd(TOOL='T3', N=1)
+    changer.cmd_ASSIGN_TOOL(gcmd)
+    assert changer.tool_map.physical_of(1) == 3
+    assert "T3 now answers to 1" in gcmd.responses[0]
+
+
+def test_assign_tool_says_who_it_displaced_and_how_to_reach_them():
+    """The displaced tool is the surprise, so it must be in the response
+    along with the way back."""
+    changer, gcmd = _changer(), _Gcmd(TOOL='T3', N=1)
+    changer.cmd_ASSIGN_TOOL(gcmd)
+    said = gcmd.responses[0]
+    assert "T1 has no number" in said
+    assert "RESET=1" in said
+
+
+def test_assign_tool_accepts_a_bare_number_as_the_tool():
+    changer, gcmd = _changer(), _Gcmd(TOOL='3', N=1)
+    changer.cmd_ASSIGN_TOOL(gcmd)
+    assert changer.tool_map.physical_of(1) == 3
+
+
+def test_assign_tool_reports_a_no_op_rather_than_displacing_anyone():
+    changer, gcmd = _changer(), _Gcmd(TOOL='T2', N=2)
+    changer.cmd_ASSIGN_TOOL(gcmd)
+    assert changer.tool_map.is_identity()
+    assert "already answers" in gcmd.responses[0]
+
+
+def test_reset_restores_the_map():
+    changer = _changer()
+    changer.cmd_ASSIGN_TOOL(_Gcmd(TOOL='T3', N=1))
+    gcmd = _Gcmd(RESET=1)
+    changer.cmd_ASSIGN_TOOL(gcmd)
+    assert changer.tool_map.is_identity()
+    assert "reset" in gcmd.responses[0]
+
+
+def test_a_number_outside_the_machines_range_is_refused():
+    """Bounded because a file for this machine only ever emits T0..T3, and
+    the bound is what keeps every status list dense."""
+    changer = _changer()
+    with pytest.raises(_CommandError):
+        changer.cmd_ASSIGN_TOOL(_Gcmd(TOOL='T3', N=EXTRUDER_COUNT))
+
+
+def test_remapping_during_a_toolchange_is_refused():
+    changer = _changer(changing=True)
+    with pytest.raises(_CommandError, match="toolchange is running"):
+        changer.cmd_ASSIGN_TOOL(_Gcmd(TOOL='T3', N=1))
+
+
+def test_remapping_mid_print_is_refused():
+    """The next T<n> would go to a different nozzle, with different offsets,
+    in the middle of an object."""
+    changer = _changer(printing=True)
+    with pytest.raises(_CommandError, match="print is running"):
+        changer.cmd_ASSIGN_TOOL(_Gcmd(TOOL='T3', N=1))
+
+
+def test_remapping_while_paused_is_allowed():
+    """Paused is exactly when somebody swaps a spool and wants the rest of
+    the file pointed at another tool."""
+    changer = _changer(printing=True, paused=True)
+    changer.cmd_ASSIGN_TOOL(_Gcmd(TOOL='T3', N=1))
+    assert changer.tool_map.physical_of(1) == 3
+
+
+def test_reset_works_even_mid_print():
+    """RESET is the way out of a bad map, so it must not be gated behind the
+    state that makes a bad map dangerous."""
+    changer = _changer(printing=True)
+    changer.cmd_ASSIGN_TOOL(_Gcmd(RESET=1))
+    assert changer.tool_map.is_identity()
