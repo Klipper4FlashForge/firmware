@@ -13,3 +13,15 @@ In OrcaSlicer, open **Printer Settings**, change the upload protocol from
 
 Slice the model again and upload the resulting `.gcode` file through the
 Moonraker upload target.
+
+## A printer that went back to stock has no Klipper
+
+Printers that ran a Reforge release from before September 2026 keep one
+Reforge file through a stock flash: the script the printer runs at boot to
+start Klipper. The FlashForge package has no copy of it to put back, so the
+screen comes up looking normal and nothing behind it works, however many times
+the stock package is flashed.
+
+Releases from September 2026 onwards leave that file alone. For a printer
+already in that state, [Going back to
+stock](going-back-to-stock.md) has the one-flash repair.

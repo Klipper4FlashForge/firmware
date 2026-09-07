@@ -89,6 +89,7 @@ ifeq ($(LOCAL),)
           -v $(DOCKER_SOCK):$(DOCKER_SOCK) \
           -e TEST_ENV -e PRINTER_IMAGE -e REAL_PKG -e SIM_IMAGE \
           -e SIM_VERBOSE -e PROG_MB -e DATA_MB -e REQUIRE_PRINTER_SIM \
+          -e IMAGE_NS -e IMAGE_NAME -e IMAGE_TAG \
           $(IMAGE)
   RUNTTY = $(subst --rm -i,--rm -it,$(RUNSIM))
 else
@@ -105,7 +106,7 @@ RUNBLDTTY = $(subst --rm -i,--rm -it,$(RUN))
 .PHONY: help image shell passwd build vendor packages \
         printer-image printer-image-push \
         boot-screen boot-screen-sim \
-        qa qa-static qa-replica \
+        recovery qa qa-scripts qa-static qa-replica \
         release clean distclean
 
 help:
@@ -126,10 +127,15 @@ help:
 	@echo 'other one. MODEL=Creator5 make build  builds the non-Pro variant.'
 	@echo
 	@echo 'Recovery: keep a copy of the STOCK FlashForge .tgz on a spare stick.'
-	@echo 'Flashing it restores every file the mod touches.'
+	@echo 'Flashing it restores every file the mod touches EXCEPT one --'
+	@echo 'klipperDaemon, which their package does not carry, so the printer'
+	@echo 'comes back with a UI and no Klipper. That is what this builds:'
+	@echo '  make recovery     the repair package -> work/recovery/'
+	@echo '                    (flashed AFTER the stock package)'
 	@echo
 	@echo 'Test:'
 	@echo '  make qa               both lanes'
+	@echo '  make qa-scripts       the script checks alone: parses, bashisms, $$MODDIR guards'
 	@echo '  make qa-static        needs nothing: parses, names, packaging, the boot graph'
 	@echo '  make qa-replica       needs docker + the firmware: install, upgrade, boot'
 	@echo
@@ -249,6 +255,22 @@ release: image config.env
 	@echo; echo "dist/:"; ls -lh dist | awk 'NR>1{print "   "$$9"  "$$5}'
 	@echo; echo "Each file installs ONLY on the model in its name."
 
+# The recovery package: one file, for printers that a downgrade to stock left
+# with a working UI and no Klipper. It carries no mod at all -- FlashForge's
+# klipperDaemon, which their own package does not restore, and their Klipper
+# configs. See installer/recovery.sh for what is broken on those machines.
+#
+# It needs the stock package (for the configs and the model gate) and nothing
+# `make build` produces, so it is fetch + unpack + pack rather than a build.
+# One model per run, like `make build`:  MODEL=Creator5 make recovery.
+# Output is work/recovery/, deliberately not work/out: the replica lane installs
+# "the newest .tgz in work/out" as the mod under test, and `make build` wipes
+# that directory before it writes to it.
+recovery: image config.env
+	@$(RUN) ./bin/fetch-assets.sh --stock
+	@$(RUN) ./bin/unpack.sh
+	@$(RUN) ./bin/pack-recovery.sh
+
 # ===========================================================================
 #  TEST LANE -- never ships. Reads test.env for the replica settings; the only
 #  targets allowed to reach the docker daemon ($(RUNSIM)).
@@ -293,6 +315,15 @@ release: image config.env
 qa: image
 	@$(RUNSIM) python3 -m pytest ./qa -q
 
+# The part of the static lane that needs no package feed: every script parses,
+# nothing shipped is secretly bash, and no `[ -f $MODDIR/... ]` guard names a
+# path no package ships. The rest of qa/static reads .apk files and needs
+# `make packages` first, which the recovery workflow has no reason to do --
+# it builds a package with no mod payload in it at all.
+qa-scripts: image
+	@$(RUN) python3 -m pytest ./qa/static/test_shell_syntax.py \
+	                          ./qa/static/test_moddir_paths.py -q
+
 qa-static: image
 	@$(RUN) python3 -m pytest ./qa/static -q
 
@@ -310,6 +341,15 @@ qa-replica: image
 #
 #   make printer-image           build (one image serves both models)
 #   make printer-image-push      build and push to Docker Hub
+#
+# REBUILDING IT AFTER A FIX TO ONE OF THE SCRIPTS IT CARRIES needs a new tag:
+# ci.yml and release.yml pin the old one, and a release is blocked on that
+# image, so pushing different contents to the same name moves the substrate a
+# release was proved on without a commit saying so.
+#
+#   IMAGE_TAG=1.9.7-1.2.9-20260810-r2 make printer-image-push
+#
+# then bump PRINTER_IMAGE in test.env.example, ci.yml and release.yml.
 #
 # Point PRINTER_IMAGE in test.env at it to use it.
 #
@@ -329,7 +369,7 @@ boot-screen-sim: image
 	@$(RUNSIM) ./tools/replica/sim-boot-screen.py
 
 clean:
-	@rm -rf work/stage work/out work/modpayload-root
+	@rm -rf work/stage work/stage-recovery work/out work/recovery work/modpayload-root
 	@echo cleaned
 
 distclean:

@@ -270,7 +270,11 @@ jobs:
           `/usr/data/logs/helixscreen.log`. There is no automatic fallback --
           `apk del anvil-helixscreen` to boot headless on
           purpose. **To go back to stock**, put FlashForge's own package on a
-          USB stick and power on -- that path is tested on every release too.
+          USB stick and power on. Their package restores everything it
+          carries; the one file it has no copy of is the script that starts
+          Klipper, and a printer that came back with a working screen and no
+          Klipper is repaired by the recovery package on the `recovery-v*`
+          releases. Releases from September 2026 leave that file alone.
 
           ---
 

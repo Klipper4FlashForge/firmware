@@ -109,7 +109,8 @@ working.
 
 **Your `printer.cfg` is never touched** — not by this flash and not by any
 update. It is your file, it is where your own settings go, and leaving it
-alone is also part of why flashing back to stock works cleanly.
+alone is also part of why [flashing back to
+stock](going-back-to-stock.md) works cleanly.
 
 Then work through [Your first print](first-print.md), in order, with the
 emergency stop within reach: it starts with the checks that say whether the

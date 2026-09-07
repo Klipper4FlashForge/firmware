@@ -9,6 +9,34 @@ both printer models or through every real-world workflow.
 Release preparation and documentation sweep. No firmware behavior is changed
 by this entry.
 
+### Added
+
+- A recovery package, built with `make recovery`, for printers that went back
+  to stock and came up with a working screen and no Klipper. A stock flash
+  restores every file Reforge points at itself except `klipperDaemon`, which
+  the FlashForge package does not carry: the printer keeps Reforge's copy,
+  whose `start` is a deliberate no-op, and stock's `start.sh` therefore starts
+  no Klipper at all. The package restores FlashForge's own file, clears the
+  dead config links an older release left behind, and puts FlashForge's
+  Klipper configs back. It refuses to run on a printer still running Reforge,
+  and never touches `printer.cfg`. See
+  [Going back to stock](docs/going-back-to-stock.md). It is built and
+  published from
+  [Klipper4FlashForge/stock-recovery](https://github.com/Klipper4FlashForge/stock-recovery),
+  which checks this repo out and releases there, so a repair for owners of old
+  releases is not buried among firmware releases they must not flash to get
+  it.
+
+### Fixed
+
+- The replica's seeded `printer.cfg` no longer voids its own SAVE_CONFIG
+  block. `seed-prog.sh` appended the `USER-CONFIG-MUST-SURVIVE` marker as a
+  plain comment after the SAVE_CONFIG header, and Klipper discards the entire
+  autosave block on the first line there that does not start with `#*#` — so
+  on every replica, klippy saw none of the machine's saved PID, input shaper,
+  bed mesh or probe values, and stopped on an unrelated-looking missing
+  option. `qa/replica/test_install.py` now asserts the invariant.
+
 ## v20260827c-melitopol — 2026-08-27
 
 ### Added

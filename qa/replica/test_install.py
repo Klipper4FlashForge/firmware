@@ -339,6 +339,32 @@ def test_the_user_printer_cfg_was_not_clobbered(box):
     assert cfg.exists, "user printer.cfg was clobbered by the install"
 
 
+def test_the_save_config_block_is_still_readable(box):
+    """Every line after the SAVE_CONFIG header starts with '#*#'.
+
+    That is configfile.py's rule, and it fails silently: `_find_autosave_data`
+    meets one line that breaks it, logs "autosave state corrupted" and throws
+    away the ENTIRE autosave block -- every PID constant, the input shaper, the
+    bed mesh, the probe offset. klippy then stops on "Option 'control' in
+    section 'heater_bed' must be specified", which names none of that.
+
+    Asserted here because the replica did exactly this to itself:
+    seed-prog.sh's USER-CONFIG-MUST-SURVIVE marker was appended as a plain
+    comment, landing after the header, so on this machine klippy could not see
+    one saved value. Nothing noticed until a test ran a stock klippy on it.
+    """
+    text = box.file("/usr/data/config/printer.cfg").text
+    header = "SAVE_CONFIG"
+    if header not in text:
+        return              # nothing has been saved on this machine yet
+    tail = text.split(header, 1)[1].split("\n", 1)[-1]
+    bad = [ln for ln in tail.split("\n") if ln.strip() and not ln.startswith("#*#")]
+    assert not bad, (
+        "these lines sit after the SAVE_CONFIG header and do not start with "
+        "'#*#', so Klipper discards the whole autosave block and the machine "
+        "loses every calibrated value in it: %r" % bad[:5])
+
+
 # ------------------------------------------------------------ the install log
 
 def test_the_installer_said_it_installed(box):

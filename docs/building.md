@@ -113,6 +113,48 @@ and then re-runs the end-to-end install against the exact `dist/*.tgz` files
 that get attached — not against a package built from the same tree, but those
 files. Releases are marked pre-release.
 
+## The recovery package
+
+A separate, much smaller `.tgz` that carries no mod at all: FlashForge's own
+`klipperDaemon` and their Klipper configs. It exists because a stock flash
+restores neither of the first — their package has no `klipperDaemon` in it —
+so a printer that ran a release from before September 2026 goes back to stock
+with a working screen and no Klipper. `installer/recovery.sh` carries the
+diagnosis at the top; [Going back to stock](going-back-to-stock.md) is the
+owner-facing version.
+
+```sh
+make recovery                     # -> work/recovery/Creator5Pro-...tgz
+MODEL=Creator5 make recovery      # the other model
+```
+
+It needs the stock package and nothing else — no feed, no cross-compiler, no
+signing key — so it is fetch, unpack, pack. Output goes to `work/recovery/`
+rather than `work/out/`, because `make build` wipes that directory and the
+replica lane treats the newest `.tgz` in it as the mod under test.
+
+**It is published from another repository**, not from this one:
+[Klipper4FlashForge/stock-recovery](https://github.com/Klipper4FlashForge/stock-recovery).
+Its workflow checks this repo out at a ref you name, builds both models with
+the commands above, and releases them there. Nothing about that needs a token:
+this repo is public, so the recovery repo reads it with the checkout action and
+publishes to itself with its own `GITHUB_TOKEN`.
+
+Keeping it separate is what stops a repair for owners of old releases being
+buried among firmware releases they must not flash to get it. A `recovery-v*`
+tag pushed there is the whole release procedure; the sources stay here, and the
+release notes record the commit they were built from.
+
+That job runs `make qa-scripts` — the parse, dialect and `$MODDIR`-guard
+checks, which is what applies to a package whose only executable is one shell
+script — and then proves the built packages decrypt, that the installer inside
+parses, that the `klipperDaemon` they carry is FlashForge's byte for byte, and
+that each model's gate matches its filename. It does **not** rebuild the
+firmware to re-run the replica lane. The recovery package's own replica gate
+is `qa/replica/test_recovery.py`, which reproduces a downgraded machine and
+asserts the repair; it is part of `make qa` and runs in `ci.yml` and
+`release.yml` on every push.
+
 ## Publishing the feed
 
 A release attaches two `.tgz` installers and one more file:

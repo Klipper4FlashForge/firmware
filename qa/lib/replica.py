@@ -414,7 +414,13 @@ def mod_package(config):
         return chosen
 
     out = ROOT / "work" / "out"
-    found = [p for p in out.glob("*-*.tgz") if p.is_file()]
+    # bin/pack-recovery.sh writes to work/recovery/, not here. The name filter
+    # is the second lock on the same door:
+    # a recovery package copied up here by hand would otherwise be installed
+    # as the mod, and the failure it produces -- "nothing reached the userdata
+    # partition" -- names neither the file nor the reason.
+    found = [p for p in out.glob("*-*.tgz")
+             if p.is_file() and "-recovery-" not in p.name]
     if not found:
         raise ReplicaMissing(
             "no package in work/out, so there is nothing to install and the "
@@ -455,7 +461,21 @@ def installed_image(config=None, on_output=None):
     base = resolve_image(config, docker)
     pkg = mod_package(config)
 
-    tag = "creator5-printer-anvil:%s" % _md5(pkg)[:12]
+    # KEYED ON THE BASE TOO, not on the package alone. The bake installs a
+    # package INTO a replica image, so the result is a function of both --
+    # and a tag that named only the package silently handed back an image
+    # baked from a different PRINTER_IMAGE. That is not hypothetical: a fix
+    # to tools/replica/printer/seed-prog.sh was verified against a rebuilt
+    # base, the lane reused yesterday's bake, and the fix read as ineffective.
+    #
+    # The image ID when docker has it, the name when it does not (the first
+    # run pulls it during the bake below): either distinguishes one base from
+    # another, which is all this key has to do.
+    base_id = subprocess.run([docker, "image", "inspect", "-f", "{{.Id}}", base],
+                             capture_output=True, text=True)
+    base_key = base_id.stdout.strip() if base_id.returncode == 0 else base
+    tag = "creator5-printer-anvil:%s" % hashlib.md5(
+        ("%s\n%s" % (base_key, _md5(pkg))).encode()).hexdigest()[:12]
     have = subprocess.run([docker, "image", "inspect", tag],
                           capture_output=True)
     if have.returncode == 0:

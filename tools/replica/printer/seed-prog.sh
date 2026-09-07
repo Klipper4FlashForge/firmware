@@ -38,7 +38,33 @@ fi
 
 # A marker that must survive every install. Appended rather than written, so
 # it works whether printer.cfg came from the factory image or not.
-grep -q USER-CONFIG-MUST-SURVIVE $R/usr/data/config/printer.cfg 2>/dev/null \
-    || echo '# USER-CONFIG-MUST-SURVIVE' >> $R/usr/data/config/printer.cfg
+#
+# INSIDE THE SAVE_CONFIG BLOCK WHEN THERE IS ONE, and that is not cosmetic.
+# configfile.py reads everything after the SAVE_CONFIG header as the autosave
+# config and refuses the lot -- "autosave state corrupted" in klippy.log, and
+# nothing else -- the moment it meets a line there that does not start with
+# '#*# '. A plain comment appended to a factory printer.cfg therefore threw
+# away every saved value on the replica: the PID constants, the input shaper,
+# the bed mesh, the probe offset. klippy then failed on "Option 'control' in
+# section 'heater_bed' must be specified", which names none of that.
+#
+# '#*# ' + a comment survives the strip as a comment, so the block still
+# parses and the marker is still greppable. A printer.cfg with no SAVE_CONFIG
+# block has no autosave data to protect and takes the plain form -- there,
+# '#*#' in the regular part is what would trip the same warning.
+#
+# THE sed REPAIRS A MACHINE THAT ALREADY HAS THE PLAIN ONE. The published
+# PRINTER_IMAGE was baked with it, and a plain `grep -q || append` would find
+# the marker there, do nothing, and leave the autosave block dead for the life
+# of that image.
+CFG=$R/usr/data/config/printer.cfg
+if grep -q '^#\*# <-* SAVE_CONFIG' $CFG 2>/dev/null; then
+    sed -i 's/^# USER-CONFIG-MUST-SURVIVE$/#*# # USER-CONFIG-MUST-SURVIVE/' $CFG
+    grep -q USER-CONFIG-MUST-SURVIVE $CFG \
+        || echo '#*# # USER-CONFIG-MUST-SURVIVE' >> $CFG
+else
+    grep -q USER-CONFIG-MUST-SURVIVE $CFG 2>/dev/null \
+        || echo '# USER-CONFIG-MUST-SURVIVE' >> $CFG
+fi
 
 exit 0

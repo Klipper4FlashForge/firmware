@@ -32,6 +32,18 @@ cd "$(cd "$(dirname "$0")/../.." && pwd)"
 NS="${IMAGE_NS:-monstrofil}"
 NAME="${IMAGE_NAME:-creator5-printer}"
 FWVER="${FW_VERSION:-1.9.7-1.2.9-20260810}"
+# The published tag, which is the firmware version by default and is separable
+# from it on purpose. FW_VERSION also builds the download URLs, so it cannot be
+# the knob for "the same firmware, baked again": rebuilding this image after a
+# fix to one of the scripts baked into it -- seed-prog.sh, entrypoint.sh --
+# needs a NEW tag, because ci.yml and release.yml pin the old one and a release
+# is blocked on it. Pushing a different image to a pinned tag would move the
+# substrate a release was proved on without a commit saying so.
+#
+#     IMAGE_TAG=1.9.7-1.2.9-20260810-r2 make printer-image-push
+#
+# then bump PRINTER_IMAGE in test.env.example, ci.yml and release.yml.
+TAG="${IMAGE_TAG:-$FWVER}"
 
 REL="https://github.com/ghzserg/FF/releases/download/R"
 # Either model's package yields the same rootfs; the Pro's is the one used.
@@ -46,13 +58,13 @@ DOCKER=docker
 command -v docker >/dev/null 2>&1 || DOCKER=docker.exe
 
 echo "=============================================================="
-echo " $NS/$NAME:$FWVER"
+echo " $NS/$NAME:$TAG"
 echo "=============================================================="
 echo "   stock:   $STOCK_URL"
 echo "   factory: $FACTORY_URL"
 echo
 
-RAW="$NS/$NAME:$FWVER-unbaked"
+RAW="$NS/$NAME:$TAG-unbaked"
 
 $DOCKER build -t "$RAW" \
     --build-arg "STOCK_URL=$STOCK_URL" \
@@ -81,23 +93,23 @@ if [ "$BAKE" = 1 ]; then
     $DOCKER commit \
         --change 'ENTRYPOINT ["/opt/printer/entrypoint.sh"]' \
         --change "LABEL com.flashforge.baseline=$(basename "$STOCK_URL")" \
-        c5bake "$NS/$NAME:$FWVER" >/dev/null
+        c5bake "$NS/$NAME:$TAG" >/dev/null
     $DOCKER rm c5bake >/dev/null
     $DOCKER rmi "$RAW" >/dev/null 2>&1 || true
 else
-    $DOCKER tag "$RAW" "$NS/$NAME:$FWVER"
+    $DOCKER tag "$RAW" "$NS/$NAME:$TAG"
     $DOCKER rmi "$RAW" >/dev/null 2>&1 || true
 fi
-$DOCKER tag "$NS/$NAME:$FWVER" "$NS/$NAME:latest"
+$DOCKER tag "$NS/$NAME:$TAG" "$NS/$NAME:latest"
 
 if [ "$PUSH" = 1 ]; then
     echo ">> pushing"
-    $DOCKER push "$NS/$NAME:$FWVER"
+    $DOCKER push "$NS/$NAME:$TAG"
     $DOCKER push "$NS/$NAME:latest"
 fi
 
 echo
-echo "built: $NS/$NAME:$FWVER"
+echo "built: $NS/$NAME:$TAG"
 echo
 echo "Use it instead of building the replica locally:"
-echo "    PRINTER_IMAGE=$NS/$NAME:$FWVER make test-install"
+echo "    PRINTER_IMAGE=$NS/$NAME:$TAG make qa-replica"
