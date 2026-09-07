@@ -1434,7 +1434,9 @@ class FFToolchange:
         nozzle = gcmd.get_float('NOZZLE')
         bed = gcmd.get_float('BED', 0.)
         layer = gcmd.get_float('LAYER', 0.)
-        tool = gcmd.get_int('TOOL', -1, minval=-1, maxval=EXTRUDER_COUNT - 1)
+        tool = self._physical_arg(gcmd, required=False)
+        if tool is None:
+            tool = -1
         if tool < 0:
             current, _reason = self._current_tool_or_none()
             tool = current if current is not None and current >= 0 else 0
@@ -1491,7 +1493,7 @@ class FFToolchange:
         SET_GCODE_OFFSET Z_ADJUST without MOVE=1, the frame shifts and the
         next move lands in it, which is what babystepping into a live print
         has to do."""
-        tool = gcmd.get_int('TOOL', minval=0, maxval=EXTRUDER_COUNT - 1)
+        tool = self._physical_arg(gcmd)
         adjust = gcmd.get_float('ADJUST', None)
         value = gcmd.get_float('VALUE', None)
         save = gcmd.get_int('SAVE', 0, minval=0, maxval=1)
@@ -1666,7 +1668,9 @@ class FFToolchange:
                               " (and disable the others); TOOL= overrides")
 
     def cmd_FF_RUNOUT_ARM(self, gcmd):
-        tool = gcmd.get_int('TOOL', -1)
+        tool = self._physical_arg(gcmd, required=False)
+        if tool is None:
+            tool = -1
         if tool < 0:
             tool, reason = self._current_tool_or_none()
             if tool is None or tool < 0:

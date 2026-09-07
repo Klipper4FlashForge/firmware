@@ -693,7 +693,7 @@ class FFToolOffset:
 
     def cmd_TOOL_CALIBRATE_TOOL_OFFSET(self, gcmd):
         """klipper-toolchanger's signature: no arguments, measures whatever
-        is on the carriage. Select the tool first (SELECT_TOOL T=<n>, or
+        is on the carriage. Select the tool first (SELECT_TOOL TOOL=T<n>, or
         T<n>), exactly as upstream's CALIBRATE_TOOL_OFFSETS loop does."""
         if self.toolchange is None:
             raise gcmd.error("%s: [ff_toolchange] not loaded -- there is no"
@@ -702,7 +702,7 @@ class FFToolOffset:
             self.reactor.monotonic()).get('current_tool', -1)
         if tool < 0:
             raise gcmd.error(
-                "%s: no tool is mounted. SELECT_TOOL T=<0..%d> first --"
+                "%s: no tool is mounted. SELECT_TOOL TOOL=T<0..%d> first --"
                 " this measures the tool on the carriage, and with an empty"
                 " one it would save the bare carriage as a nozzle position,"
                 " ~3.2 mm out in the crash direction. (TOOL_LOCATE_SENSOR"
@@ -719,7 +719,12 @@ class FFToolOffset:
             # nozzle position ~3.2 mm out in the crash direction.
             carriage = self.toolchange.get_status(self.reactor.monotonic())
             if carriage.get('current_tool', -1) != tool:
-                self._run('T%d' % tool)
+                # By NAME, not a bare T<n>: `tool` is the head this
+                # measurement will be saved against, and a bare T<n> goes
+                # through the tool map. Under a remap it would grab a
+                # different head and store its nozzle position in this tool's
+                # section -- a wrong nozzle_z, ~3 mm in the crash direction.
+                self._run('SELECT_TOOL TOOL=T%d' % tool)
                 self._wait_moves()
                 carriage = self.toolchange.get_status(self.reactor.monotonic())
                 if carriage.get('current_tool', -1) != tool \
@@ -763,7 +768,7 @@ class FFToolOffset:
                 tool_object.set_nozzle(center_x, center_y, z_trigger)
 
             # the app's exit block: heater off for the tool, Z15
-            self._run('M104 S0 T%d' % tool)
+            self._run('SET_TOOL_TEMPERATURE TOOL=T%d TARGET=0' % tool)
             self._run('G1 Z%.3f F%d' % (self.z_final, FEED_PASS1))
             self._run('M400')
             if save:
