@@ -15,7 +15,7 @@ print is driven from Mainsail unless `ff_*` re-provides it.
 | Print lifecycle | prepare (14 steps), preamble, pause (**all hotends off**), resume (staged reheat + re-grab), exit block | no START/END/PAUSE/RESUME macros in stock config | 50-print-lifecycle.md |
 | Z frame | absolute print-start Z offset (~+3.2 mm) computed in `BuildPage::startPrint`; per-tool XY/Z diffs applied on every grab | nothing; eddy `G28 Z` is **not** nozzle zero | 40-offsets.md |
 | Mesh / leveling | app triggers `BED_MESH_CALIBRATE` / `BED_MESH_PROFILE LOAD=…` | executes | 50-print-lifecycle.md |
-| Tool remap | `SDCARD_SET_GCODE_EX_USED_BASE`, `SDCARD_SET_CHANNEL`; fork's `virtual_sdcard` swallows bare `Tn` | executes blindly | 20-klipper-fork.md |
+| Tool remap | `SDCARD_SET_GCODE_EX_USED_BASE`, `SDCARD_SET_CHANNEL`; fork's `virtual_sdcard` swallows bare `Tn` | executes blindly — **ported**, as klipper-toolchanger's `ASSIGN_TOOL` in `ff_toolchange.py`'s tool map (see `docs/toolchange.md`) | 20-klipper-fork.md |
 | LEDs / fans | `SET_LED LED=chamber_led`, `SET_FAN_SPEED FAN=…` enum mapping | bare sections — the chamber light is **ported**: `ff-chamber.cfg` sets `initial_WHITE: 1.0` so it comes up lit without a UI to switch it | `ledControlMgr`, `fanControlMgr` |
 | PLR, timelapse, camera, MQTT/REST, OTA, drying box | app only | none | 60-background.md |
 

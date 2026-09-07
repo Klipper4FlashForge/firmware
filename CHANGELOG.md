@@ -6,8 +6,29 @@ both printer models or through every real-world workflow.
 
 ## Unreleased
 
-Release preparation and documentation sweep. No firmware behavior is changed
-by this entry.
+### Added
+
+- `ASSIGN_TOOL TOOL=T<n> N=<number>` points a number a sliced file uses at a
+  different tool, so a file sliced for the wrong heads prints without being
+  sliced again. Tool changes and temperatures both follow it. It lasts until
+  the printer restarts and is never saved; `ASSIGN_TOOL RESET=1` undoes it,
+  and `TOOLCHANGE_STATUS` and every print report the mapping in force. A
+  permanent baseline can be set as `tool_number` in `[ff_tool <n>]`.
+- `M104`/`M109` with a `T` now go through that mapping, as
+  klipper-toolchanger's own macros do. Without a `T` they are unchanged and
+  still address the active extruder.
+
+### Changed
+
+- `toolchanger.tool_number`, `tool_numbers`, `tool_names` and
+  `tool T<n>.tool_number` now report the assignable **number** rather than the
+  tool, which is klipper-toolchanger's meaning. They are identical until
+  `ASSIGN_TOOL` is used. Each tool's permanent index is still available as
+  `tool T<n>.physical_number`, and `ff_toolchange.current_tool` is unchanged.
+- `SELECT_TOOL T=<n>` and `TOOLCHANGE INDEX=<n>` take a tool **number** and
+  follow the mapping. To address one particular tool regardless of it, use
+  `SELECT_TOOL TOOL=T<n>` — which is what every macro this project ships now
+  does.
 
 ## v20260827c-melitopol — 2026-08-27
 

@@ -39,6 +39,22 @@ needed for that.
 No re-slicing is needed: `[ff_print]` applies the print Z offset for any file,
 including ones sliced before the mod existed.
 
+**Sliced for the wrong tools?** If a file expects PETG in T1 but the PETG is
+physically in T3, you do not have to re-slice it — point the number at the
+tool from the console or a macro button:
+
+```
+ASSIGN_TOOL TOOL=T3 N=1     # the file's T1 now means tool T3
+ASSIGN_TOOL RESET=1         # undo
+```
+
+Tool changes *and* temperatures follow it, so the right nozzle heats as well
+as prints. It lasts until the printer restarts, and every print says the
+mapping in its log so a forgotten one cannot quietly ruin a job. Assigning in
+Orca — which filament goes in which extruder, before you slice — does the same
+thing permanently; this is the way out when the file already exists. Full
+detail in [Tool changes](toolchange.md#tool-numbers).
+
 `START_PRINT` options, for the explicit path: `TOOLS=0:220,2:240` every tool
 the file uses with its clean temperature (Orca: `is_extruder_used[n]`; a bare
 `TOOLS=0,2` also works and falls back to `NOZZLE=`) — presence gate and
