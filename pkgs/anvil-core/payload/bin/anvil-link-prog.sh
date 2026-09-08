@@ -97,24 +97,57 @@ link_one() {
 link_one prog/firmwareExe   /usr/prog/PROGRAM/software/firmwareExe
 link_one prog/start.sh      /usr/prog/klipper/start.sh
 
-# KLIPPERDAEMON IS FLASHFORGE'S AND IS LEFT ALONE, which is what keeps a stock
-# flash a no-op. Their package restores the two paths above -- run.sh copies
-# its own firmwareExe and start.sh over them, and busybox `cp -f` unlinks a
-# symlink rather than writing through it -- but it carries no klipperDaemon at
-# all: not in the software component, not in its md5sum.list, no line in
-# run.sh. Anything the mod puts at that path is therefore permanent, and
-# stock's start.sh, whose last line is
+# KLIPPERDAEMON IS FLASHFORGE'S, AND IS PUT BACK WHEN IT IS NOT THERE.
+#
+# Their package restores the two paths above -- run.sh copies its own
+# firmwareExe and start.sh over them, and busybox `cp -f` unlinks a symlink
+# rather than writing through it -- but it carries no klipperDaemon at all:
+# not in the software component, not in its md5sum.list, no line in run.sh.
+# Whatever sits at that path therefore survives every stock flash, and stock's
+# start.sh calls it on each boot:
 #
 #     /usr/prog/klipper/klipperDaemon start
 #
-# runs whatever it finds there for the life of the machine.
+# So the mod must not own that file, and a machine where it does cannot be
+# returned to stock: the copy FlashForge shipped is gone and only this package
+# still has one. $MODDIR/prog/stock-klipperDaemon is that copy, restored here
+# on every install and every `apk upgrade`, which is what closes the window
+# for a printer that took an earlier release.
 #
-# Nothing here needs it. start.sh above is ours and asks s6-rc; FlashForge's
-# firmwareExe execs /usr/prog/klipper/start.sh and names no other script;
-# Moonraker runs with `provider: none`, so a restart from Mainsail goes over
-# the API. The one caller left is a person at an ssh prompt, who gets
+# Nothing here calls it: start.sh above is ours and asks s6-rc, FlashForge's
+# firmwareExe execs /usr/prog/klipper/start.sh and names no other script, and
+# Moonraker runs with `provider: none`. A person at an ssh prompt gets
 # FlashForge's script and an unsupervised klippy beside the supervised one --
 # `s6-rc -u change klipper` and `s6-svc` are what to use instead.
+restore_stock_daemon() {
+    dst=/usr/prog/klipper/klipperDaemon
+    src=$MODDIR/prog/stock-klipperDaemon
+
+    # A real file is FlashForge's own, whatever version this machine has, and
+    # is left exactly as it is. Only a link into $MODDIR is this script's.
+    [ -L "$dst" ] || return 0
+    case "$(readlink "$dst")" in
+        "$MODDIR"/*) ;;
+        *) return 0 ;;
+    esac
+    [ -f "$src" ] || {
+        echo "link-prog: !! no $src -- $dst stays a link into \$MODDIR" >&2
+        return 0
+    }
+
+    # Through a temp name, and `rm` before the rename: this is the file the
+    # next boot's start.sh executes, and copying onto the link would write
+    # through it into $MODDIR instead.
+    rm -f "$dst.anvil-new"
+    if cp "$src" "$dst.anvil-new" && chmod 755 "$dst.anvil-new" &&
+       rm -f "$dst" && mv -f "$dst.anvil-new" "$dst"; then
+        echo "link-prog: $dst restored to FlashForge's own"
+    else
+        rm -f "$dst.anvil-new"
+        echo "link-prog: !! could not restore $dst" >&2
+    fi
+}
+restore_stock_daemon
 
 # ---- the live config directory ---------------------------------------------
 #
