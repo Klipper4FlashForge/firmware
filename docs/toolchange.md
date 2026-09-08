@@ -25,17 +25,17 @@ documented in the file headers.
 | [`pkgs/klipper/payload/klipper/klippy/extras/ff_tool.py`](../pkgs/klipper/payload/klipper/klippy/extras/ff_tool.py) | `/usr/data/anvil/klipper/klippy/extras/` | `[ff_tool n]` — one section per tool; `dock_x/dock_y`, `nozzle_x/y/z` and `z_adjust` are all autosaved (import or calibration + `SAVE_CONFIG`) |
 | [`pkgs/klipper/payload/klipper/klippy/extras/ff_tool_offset.py`](../pkgs/klipper/payload/klipper/klippy/extras/ff_tool_offset.py) | `/usr/data/anvil/klipper/klippy/extras/` | `TOOL_CALIBRATE_TOOL_OFFSET` / `TOOL_LOCATE_SENSOR` / `TOOL_OFFSET_STATUS` — the touchscreen's nozzle XY/Z offset calibration, recovered from the binary and reimplemented in Klipper |
 | [`pkgs/klipper/payload/klipper/klippy/extras/ff_legacy.py`](../pkgs/klipper/payload/klipper/klippy/extras/ff_legacy.py) | `/usr/data/anvil/klipper/klippy/extras/` | `FF_IMPORT_FIRMWARE_CONFIG` — one-shot import of the factory/touchscreen JSON into Klipper config. The command and nothing else: no startup behaviour. `bin/ff-startup.py` is what runs it on the first boot |
-| [`pkgs/klipper-config/payload/config/ff-toolchange.cfg`](../pkgs/klipper-config/payload/config/ff-toolchange.cfg) | `/usr/data/config/` | empty `[ff_tool 0..3]` sections (the per-unit dock/nozzle data is autosaved, nothing unit-specific ships), `[ff_toolchange]` feeds/geometry, the `G28` dock-first wrapper |
-| [`pkgs/klipper-config/payload/config/ff-tool-offset.cfg`](../pkgs/klipper-config/payload/config/ff-tool-offset.cfg) | `/usr/data/config/` | `[ff_tool_offset]` — probe geometry and guards for the calibration commands |
-| [`pkgs/klipper-config/payload/config/ff-legacy.cfg`](../pkgs/klipper-config/payload/config/ff-legacy.cfg) | `/usr/data/config/` | `[ff_legacy]` — stays included permanently; declares the section and, optionally, `firmware_config_dir` |
+| [`pkgs/klipper-config/payload/config/ff-toolchange.cfg`](../pkgs/klipper-config/payload/config/ff-toolchange.cfg) | `/usr/data/anvil-data/config/` | empty `[ff_tool 0..3]` sections (the per-unit dock/nozzle data is autosaved, nothing unit-specific ships), `[ff_toolchange]` feeds/geometry, the `G28` dock-first wrapper |
+| [`pkgs/klipper-config/payload/config/ff-tool-offset.cfg`](../pkgs/klipper-config/payload/config/ff-tool-offset.cfg) | `/usr/data/anvil-data/config/` | `[ff_tool_offset]` — probe geometry and guards for the calibration commands |
+| [`pkgs/klipper-config/payload/config/ff-legacy.cfg`](../pkgs/klipper-config/payload/config/ff-legacy.cfg) | `/usr/data/anvil-data/config/` | `[ff_legacy]` — stays included permanently; declares the section and, optionally, `firmware_config_dir` |
 | [`pkgs/anvil-core/payload/bin/ffscreen.py`](../pkgs/anvil-core/payload/bin/ffscreen.py) | `/usr/data/anvil/bin/` | A few lines of text and a progress bar drawn straight onto `/dev/fb0`, geometry read from sysfs. The framebuffer is **portrait 480×800@32** and the panel is that buffer turned 90° clockwise (landscape 800×480) — established from FlashForge's own `/usr/prog/start.img`, 1536000 bytes, which only decodes into a picture read that way. Drawing is done in landscape coordinates and each rectangle is rotated on the way into the buffer, so it costs arithmetic per rectangle and nothing per pixel. All of the first boot happens before HelixScreen starts, so without it the panel is black for the longest wait of the install — which reads as a brick and invites a power cut mid-`SAVE_CONFIG`. `make boot-screen` renders every frame to PNG on the host; `make boot-screen-sim` renders the same frames inside the replica using FlashForge's own python3 on MIPS (they come out byte-identical); `qa/replica/test_boot_screen.py` is the gate |
 | [`pkgs/anvil-core/payload/bin/ff-startup.py`](../pkgs/anvil-core/payload/bin/ff-startup.py) | `/usr/data/anvil/bin/` | Everything before HelixScreen. **Every boot** it hands the toolhead boards over from their bootloaders (calling `ff_mcu_bringup.py` directly — it owns when klippy opens the ports, so it owns doing this first), starts klipper, and waits for klipper + moonraker to be ready, naming the board or service holding things up and re-handing the boards over on each retry. It runs as two s6-rc oneshots (`mcu-bringup`, then `ff-startup`), and the UI depends on the second — starting the UI before that is what produces a screen reporting a disconnected printer with no clue which board is missing. **First boot only**, once that has happened, it sends `FF_IMPORT_FIRMWARE_CONFIG` and `SAVE_CONFIG` over the moonraker API and stamps `/usr/data/anvil/.firmware-config-imported`. Only a verified save stamps, so a slow boot retries. It always runs and always waits — the `MOD_STARTUP` and `MOD_IMPORT` switches went with `anvil.conf` |
-| [`pkgs/klipper-config/payload/config/ff-print-macros.cfg`](../pkgs/klipper-config/payload/config/ff-print-macros.cfg) | `/usr/data/config/` | `START_PRINT` / `END_PRINT` / `PAUSE` / `RESUME` / `CANCEL_PRINT`, reconstructed from the app's sequences, plus the `_FF_PREFLIGHT` calibration and tool-presence gate; declares `[ff_print]` and the `FF_BEFORE_PRINT_START` / `FF_AFTER_PRINT_END` entry points it calls |
-| [`pkgs/klipper-config/payload/config/ff-filament.cfg`](../pkgs/klipper-config/payload/config/ff-filament.cfg) | `/usr/data/config/` | `LOAD_FILAMENT` / `UNLOAD_FILAMENT` / `PURGE` — the touchscreen's filament-load sequence (grab tool, purge chute, feed) recovered from the binary; unload is a designed retract (the stock app has none) |
-| [`pkgs/klipper-config/payload/config/ff-runout.cfg`](../pkgs/klipper-config/payload/config/ff-runout.cfg) | `/usr/data/config/` | Runout / clog handling: gives the stock `fd_ex*` / `fm_ex*` sensors a `runout_gcode` that pauses a Mainsail print when the **mounted** tool runs out or clogs (the app's E0162 / E0163, reported here in plain words); `ff_toolchange` arms only the mounted tool's sensors |
-| [`pkgs/klipper-config/payload/config/printer.base.cfg`](../pkgs/klipper-config/payload/config/printer.base.cfg) | `$MODDIR/config/` -> symlinked to `/usr/data/config/printer.base.cfg` | FlashForge's `printer.base.cfg` with the chamber block replaced by `[include printer.chamber.cfg]`. Klipper can override an option but cannot un-declare a section, and the plain Creator 5 has no chamber heating element, so its heater must be **absent** rather than neutralised. `bin/unpack.sh` compares this against each stock package it unpacks and warns if FlashForge's has changed |
-| [`Creator5.cfg`](../pkgs/klipper-config/payload/config/chamber/Creator5.cfg) · [`Creator5Pro.cfg`](../pkgs/klipper-config/payload/config/chamber/Creator5Pro.cfg) | `$MODDIR/config/chamber/<Machine>.cfg` -> symlinked to `/usr/data/config/printer.chamber.cfg` | The one per-model difference: the Pro gets `[heater_generic chamber_heater]` + `[verify_heater]` verbatim from FlashForge, the Creator 5 gets only `[temperature_sensor chamber]` on the same pin. **Both ship in `anvil-klipper-config`** and `anvil-link-prog.sh` links whichever the printer asks for, reading `MACHINE=` out of FlashForge's own `app_startup.sh`. They used to be a package per model, which Conflicted — each owned `config/printer.chamber.cfg`, so the package manager refused the pair and the build had to choose. Nothing is edited at build time, and the payload is no longer model-specific |
-| [`pkgs/klipper-config/payload/config/ff-chamber.cfg`](../pkgs/klipper-config/payload/config/ff-chamber.cfg) | `/usr/data/config/` | `M141` / `M191` for the chamber heater (Klipper has neither, and the stock app drove the chamber only from its own UI), plus the gate: the macros ask Klipper whether `heater_generic chamber_heater` exists, so a non-zero chamber target is refused on a machine that does not declare one. Nothing to keep in sync; identical in every package |
+| [`pkgs/klipper-config/payload/config/ff-print-macros.cfg`](../pkgs/klipper-config/payload/config/ff-print-macros.cfg) | `/usr/data/anvil-data/config/` | `START_PRINT` / `END_PRINT` / `PAUSE` / `RESUME` / `CANCEL_PRINT`, reconstructed from the app's sequences, plus the `_FF_PREFLIGHT` calibration and tool-presence gate; declares `[ff_print]` and the `FF_BEFORE_PRINT_START` / `FF_AFTER_PRINT_END` entry points it calls |
+| [`pkgs/klipper-config/payload/config/ff-filament.cfg`](../pkgs/klipper-config/payload/config/ff-filament.cfg) | `/usr/data/anvil-data/config/` | `LOAD_FILAMENT` / `UNLOAD_FILAMENT` / `PURGE` — the touchscreen's filament-load sequence (grab tool, purge chute, feed) recovered from the binary; unload is a designed retract (the stock app has none) |
+| [`pkgs/klipper-config/payload/config/ff-runout.cfg`](../pkgs/klipper-config/payload/config/ff-runout.cfg) | `/usr/data/anvil-data/config/` | Runout / clog handling: gives the stock `fd_ex*` / `fm_ex*` sensors a `runout_gcode` that pauses a Mainsail print when the **mounted** tool runs out or clogs (the app's E0162 / E0163, reported here in plain words); `ff_toolchange` arms only the mounted tool's sensors |
+| [`pkgs/klipper-config/payload/config/printer.base.cfg`](../pkgs/klipper-config/payload/config/printer.base.cfg) | `$MODDIR/config/` -> symlinked to `/usr/data/anvil-data/config/printer.base.cfg` | FlashForge's `printer.base.cfg` with the chamber block replaced by `[include printer.chamber.cfg]`. Klipper can override an option but cannot un-declare a section, and the plain Creator 5 has no chamber heating element, so its heater must be **absent** rather than neutralised. `bin/unpack.sh` compares this against each stock package it unpacks and warns if FlashForge's has changed |
+| [`Creator5.cfg`](../pkgs/klipper-config/payload/config/chamber/Creator5.cfg) · [`Creator5Pro.cfg`](../pkgs/klipper-config/payload/config/chamber/Creator5Pro.cfg) | `$MODDIR/config/chamber/<Machine>.cfg` -> symlinked to `/usr/data/anvil-data/config/printer.chamber.cfg` | The one per-model difference: the Pro gets `[heater_generic chamber_heater]` + `[verify_heater]` verbatim from FlashForge, the Creator 5 gets only `[temperature_sensor chamber]` on the same pin. **Both ship in `anvil-klipper-config`** and `anvil-link-prog.sh` links whichever the printer asks for, reading `MACHINE=` out of FlashForge's own `app_startup.sh`. They used to be a package per model, which Conflicted — each owned `config/printer.chamber.cfg`, so the package manager refused the pair and the build had to choose. Nothing is edited at build time, and the payload is no longer model-specific |
+| [`pkgs/klipper-config/payload/config/ff-chamber.cfg`](../pkgs/klipper-config/payload/config/ff-chamber.cfg) | `/usr/data/anvil-data/config/` | `M141` / `M191` for the chamber heater (Klipper has neither, and the stock app drove the chamber only from its own UI), plus the gate: the macros ask Klipper whether `heater_generic chamber_heater` exists, so a non-zero chamber target is refused on a machine that does not declare one. Nothing to keep in sync; identical in every package |
 | [`docs/notes/`](notes/) | (reference only) | Condensed reverse-engineering notes: what the stock app actually does, with binary addresses |
 
 ## ⚠️ Before you start
@@ -73,15 +73,25 @@ documented in the file headers.
 A package built from this repo needs no config editing at all. It ships:
 
 * the `ff_*.py` extras, inside the klippy tree `anvil-klipper` installs
-* the `ff-*.cfg`, to `/usr/data/config/` (`runFirmwareExe.sh`, keeping any you
-  edited and leaving the new one as `.mod-new`)
-* the `[include]` lines for all seven, at the end of `printer.base.cfg` —
-  which the stock `run.sh` force-copies to `/usr/data/config/` on every flash
+* the `ff-*.cfg`, symlinked into `/usr/data/anvil-data/config/` by
+  `anvil-link-prog.sh`, so an `apk upgrade` repoints a link instead of
+  rewriting a file
+* the `[include]` lines for all seven, at the end of `printer.base.cfg`,
+  symlinked into the same directory
 
-`printer.cfg` is never touched by any of that, by design: it is the user's
-file. That is also why the includes live in `printer.base.cfg` and not there
-— and it makes the undo button work, since flashing the stock FlashForge
-package restores its own `printer.base.cfg` and the includes go with it.
+`/usr/data/anvil-data/config` is the mod's own config directory and the only
+one klippy is pointed at. It is seeded once, on the first install, with a copy
+of everything in FlashForge's `/usr/data/config` — `printer.cfg` with its
+`#*#` block, and the stock includes the mod does not ship — and that stock
+directory is then left alone for good.
+
+That is what makes the undo button work. `/usr/data` is the data partition, so
+a stock flash does not clean it: a mod symlink left in `/usr/data/config` would
+outlive the mod and a stock Klipper would refuse to start on an `[include]`
+pointing into a `/usr/data/anvil` that is gone. Nothing of the mod's runs
+during a stock flash, so not writing there is the only version of this that
+works. `printer.cfg` is never touched by any of it either way, by design: it is
+the user's file, which is also why the includes live in `printer.base.cfg`.
 
 Flash, and your unit's calibration imports itself on the first boot — step 5
 below says how, and step 6 how to check it.
@@ -98,9 +108,10 @@ root/ssh access is covered in the community
 scp pkgs/klipper/payload/klipper/klippy/extras/ff_*.py \
     pwned@PRINTER:/usr/data/anvil/klipper/klippy/extras/
 
-# 2. the config files (data partition — survives OTA)
+# 2. the config files (data partition — survives OTA). The mod's config
+#    directory, not FlashForge's: this is the one klippy reads.
 scp pkgs/klipper-config/payload/config/ff-*.cfg \
-    pwned@PRINTER:/usr/data/config/
+    pwned@PRINTER:/usr/data/anvil-data/config/
 ```
 
 3. Make sure something includes them. A flashed printer already does, at the

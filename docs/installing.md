@@ -108,8 +108,14 @@ and config files with it and wires them up itself, so the printer comes up
 working.
 
 **Your `printer.cfg` is never touched** — not by this flash and not by any
-update. It is your file, it is where your own settings go, and leaving it
-alone is also part of why flashing back to stock works cleanly.
+update. It is your file, and it is where your own settings go.
+
+The first flash does copy it. Reforge keeps its Klipper config in a directory
+of its own, `/usr/data/anvil-data/config`, and seeds it once with your
+`printer.cfg` and the config files beside it, calibration and all. That copy is
+the live one from then on; FlashForge's `/usr/data/config` is left untouched,
+which is what lets you flash back to stock cleanly. If you ever edit
+`printer.cfg` by hand, edit the one in `/usr/data/anvil-data/config`.
 
 Then work through [Your first print](first-print.md), in order, with the
 emergency stop within reach: it starts with the checks that say whether the

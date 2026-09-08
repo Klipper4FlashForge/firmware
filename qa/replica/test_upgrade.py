@@ -17,9 +17,10 @@ nothing -- and only both at once mean anything.
 The survivor is HelixScreen's settings, held on /tmp across the wipe and copied
 back over the tarball's seeded defaults. It is now the ONLY preservation
 mechanism in the installer, so it is asserted here with a value that could only
-have come from the printer. /usr/data/config is the other half of the answer,
-and it is outside $MODDIR entirely: printer.cfg and moonraker-custom.conf are
-never candidates for deletion because the wipe cannot reach them.
+have come from the printer. The config directory is the other half of the
+answer, and it is outside $MODDIR entirely: the live printer.cfg and
+moonraker-custom.conf in /usr/data/anvil-data/config are never candidates for
+deletion because the wipe cannot reach them.
 
 THE NEGATIVE CONTROL IS INVERTED from what it used to be. `bin/not-ours` is a
 file no payload ever shipped, sitting in $MODDIR/bin beside one that has to go,
@@ -48,7 +49,13 @@ from lib.paths import ROOT
 pytestmark = pytest.mark.replica
 
 MODDIR = "/usr/data/anvil"
+# FlashForge's config directory, which the mod seeds from once and never
+# writes to, so that a printer flashed back to stock still boots.
 CONFDIR = "/usr/data/config"
+# The live config -- Klipper's AND Moonraker's, one directory. Outside $MODDIR
+# precisely so that the wipe cannot reach printer.cfg and the SAVE_CONFIG
+# block of calibrated values at the end of it.
+CONFIG_DIR = "/usr/data/anvil-data/config"
 LOG = "/usr/data/anvil-install.log"
 
 # The installer is a real file on a printer now -- app_startup.sh runs it out
@@ -178,8 +185,8 @@ def upgraded(first_install):
 
     Two things must survive, and are planted with values that could only have
     come from this printer: HelixScreen's settings.json, and an edited
-    /usr/data/config/moonraker.conf, which is outside $MODDIR and must be
-    overwritten anyway because the mod owns it.
+    moonraker.conf in the live config directory, which is outside $MODDIR and
+    must be overwritten anyway because the mod owns it.
 
     Version 2 drops helper-v1 and oldskin/, splits share/web-launcher in two --
     the rename that started all this -- and ships a settings.json and a
@@ -197,10 +204,14 @@ def upgraded(first_install):
         # tree, so the wipe would take them without the /tmp stash.
         "mkdir -p %(mod)s/helixscreen/config\n"
         "echo mine > %(mod)s/helixscreen/config/settings.json\n"
-        # Outside $MODDIR, and ours to replace: an edit here used to be kept
-        # and landed the new version as .mod-new.
-        "mkdir -p %(conf)s\n"
-        "echo 'edited by hand' > %(conf)s/moonraker.conf\n"
+        # The live config directory: outside $MODDIR, so the wipe cannot
+        # reach either of these. moonraker.conf is ours to replace -- an edit
+        # here used to be kept, landing the new version as .mod-new -- and
+        # printer.cfg is the owner's, which nothing may write: not the wipe,
+        # and not a second seeding pass.
+        "mkdir -p %(cfgdir)s\n"
+        "echo 'edited by hand' > %(cfgdir)s/moonraker.conf\n"
+        "echo 'tuned by hand' > %(cfgdir)s/printer.cfg\n"
         "mkdir -p %(build)s/v2/bin %(build)s/v2/share %(build)s/v2/www "
         "%(build)s/v2/helixscreen/config %(build)s/v2/config\n"
         "echo '#!/bin/sh' > %(build)s/v2/bin/anvil-hello\n"
@@ -212,7 +223,7 @@ def upgraded(first_install):
         # which is what makes the printer's copy something to remove rather
         # than something to put back.
         "echo v2 > %(build)s/v2/www/index.html\n"
-        % {"build": BUILD, "mod": MODDIR, "conf": CONFDIR})
+        % {"build": BUILD, "mod": MODDIR, "cfgdir": CONFIG_DIR})
     if not planted.ok:
         pytest.fail("could not set up the upgrade: %s" % planted.text)
 
@@ -348,12 +359,59 @@ def test_helixscreen_settings_survive_the_wipe(upgraded):
         % live.text)
 
 
+def test_flashforges_config_directory_is_never_written(upgraded):
+    """The property that makes flashing back to stock work: an install writes
+    nothing into /usr/data/config.
+
+    REMOVED FIRST, THEN INSTALLED, and that is the whole design of the test.
+    Asking whether these files are there would answer a different question on
+    a machine that has been through an older release -- one that DID write
+    them -- and the answer would be about the bake rather than about the
+    installer under test. Deleting them and running the installer over the top
+    asks only about this code.
+
+    The names are the mod's own. printer.cfg and printer.base.cfg are
+    FlashForge's and belong in that directory, so their presence says nothing.
+    """
+    box = upgraded
+    names = ("moonraker.conf", "moonraker-custom.conf", "timelapse.cfg")
+    box.sh("rm -f %s" % " ".join(CONFDIR + "/" + n for n in names))
+    box.sh(": > %s" % LOG)
+    run = box.sh("sh %s" % INSTALLER, timeout=INSTALL_T)
+    assert run.ok, "the installer did not run: %s" % run.text
+    log = box.file(LOG).text
+    assert "mod payload installed" in log, (
+        "nothing installed, so nothing was given the chance to write into %s. "
+        "Tail of %s:\n%s" % (CONFDIR, LOG, _tail(log)))
+    for name in names:
+        assert not box.file(CONFDIR + "/" + name).exists, (
+            "the install wrote %s/%s -- that directory is FlashForge's and a "
+            "stock flash boots from it" % (CONFDIR, name))
+
+
 def test_the_users_config_directory_is_outside_the_wipe(upgraded):
-    """/usr/data/config is where everything an owner edits lives, and nothing
-    in the installer's deletion path can reach it. This is the assertion that
-    nothing needs to."""
-    assert upgraded.file(CONFDIR).is_dir, (
-        "%s is gone -- the wipe reached outside $MODDIR" % CONFDIR)
+    """The live config directory is where everything an owner edits lives, and
+    nothing in the installer's deletion path can reach it. This is the
+    assertion that nothing needs to."""
+    assert upgraded.file(CONFIG_DIR).is_dir, (
+        "%s is gone -- the wipe reached outside $MODDIR" % CONFIG_DIR)
+
+
+def test_the_live_printer_cfg_survives_the_update(upgraded):
+    """The file every calibrated value on the machine ends up in.
+
+    It is outside $MODDIR, so the wipe cannot reach it, and the seeding pass
+    that created the directory is once-only, so an update must not put a stock
+    printer.cfg back on top of a tuned one. The fixture planted text that
+    could only have come from this printer.
+    """
+    live = upgraded.file(CONFIG_DIR + "/printer.cfg")
+    assert live.exists, (
+        "%s/printer.cfg is gone after an update -- the printer has no config "
+        "to start from" % CONFIG_DIR)
+    assert live.text.strip() == "tuned by hand", (
+        "%s/printer.cfg was rewritten by the update: %r"
+        % (CONFIG_DIR, live.text))
 
 
 def test_moonraker_conf_is_overwritten_even_when_edited(upgraded):
@@ -363,10 +421,10 @@ def test_moonraker_conf_is_overwritten_even_when_edited(upgraded):
 
     The fixture planted an edit, so a copy left behind would be visible here as
     the old text rather than as a missing file."""
-    live = upgraded.file(CONFDIR + "/moonraker.conf")
+    live = upgraded.file(CONFIG_DIR + "/moonraker.conf")
     assert live.text.strip() == "v2", (
-        "%s/moonraker.conf was not replaced: %r" % (CONFDIR, live.text))
-    assert not upgraded.file(CONFDIR + "/moonraker.conf.mod-new").exists, (
+        "%s/moonraker.conf was not replaced: %r" % (CONFIG_DIR, live.text))
+    assert not upgraded.file(CONFIG_DIR + "/moonraker.conf.mod-new").exists, (
         "a .mod-new was written -- the compare-and-keep dance is back")
 
 

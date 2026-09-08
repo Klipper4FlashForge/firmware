@@ -11,10 +11,23 @@ that line is what makes an update safe.
 
 | File | Whose |
 |---|---|
-| `/usr/data/config/printer.cfg` | **Yours** — never overwritten. Overrides go here, after the includes: restate only what you change, the last value wins. |
-| `moonraker-custom.conf` | **Yours** — created once, never rewritten, included last so your settings win. Do not delete it. |
+| `/usr/data/anvil-data/config/printer.cfg` | **Yours** — never overwritten. Overrides go here, after the includes: restate only what you change, the last value wins. |
+| `/usr/data/anvil-data/config/moonraker-custom.conf` | **Yours** — created once, never rewritten, included last so your settings win. Do not delete it. |
 | `ff-*.cfg`, `printer.base.cfg`, `moonraker.conf` | **The mod's** — overwritten on every update; do not edit. |
 | `anvil/helixscreen/config/settings.json` | **Yours** — everything you set on the screen. Written by HelixScreen itself; carried across updates along with `helixscreen.env` and its spool map. |
+
+**Two config directories, and only one of them is live.**
+`/usr/data/anvil-data/config` is Reforge's, and it is where everything now
+lives: your `printer.cfg`, `moonraker.conf` and `moonraker-custom.conf`, and
+the `ff-*.cfg` set. Klipper and Moonraker both read it, and it is what
+Mainsail's config editor shows you.
+
+The first install copies your `printer.cfg` and the config files beside it out
+of FlashForge's `/usr/data/config`, and nothing writes to that directory
+afterwards. That is what makes going back to stock work; see below. If you edit
+a config by hand over ssh, edit the copy in `/usr/data/anvil-data/config` — the
+file of the same name in `/usr/data/config` is the frozen stock one and changes
+nothing.
 
 ---
 
@@ -72,8 +85,23 @@ from — so re-flash the mod after a firmware update. The `#*#` block in
 ## Going back to stock
 
 Flashing the stock FlashForge package for your model is the uninstall — it
-installs the same way, and it restores every file the mod touches. The one
-thing it cannot bring back is FlashForge's Moonraker, which the stock package
-does not carry: the mod's build stays, it works, and Mainsail is happy with
-it. The details, and the ladder below it, are in
+installs the same way, and it restores `/usr/prog`, which is everything the
+mod replaced there.
+
+It works because the mod never wrote to FlashForge's config directory.
+`/usr/data/config` still holds the stock `printer.cfg`, the stock
+`printer.base.cfg` and the stock includes, so a stock firmware boots on the
+config it expects. The mod's own directory is left behind on the data
+partition and stock ignores it.
+
+The cost is the other half of that sentence: the calibration and the config
+edits you made **while the mod was installed** live in
+`/usr/data/anvil-data/config/printer.cfg`, and the stock firmware does not
+read them. Going back to stock returns the machine to the `printer.cfg` it had
+before you flashed the mod. Nothing is deleted — flash the mod again and your
+tuned copy is still there, exactly as you left it.
+
+The one thing a stock flash cannot bring back is FlashForge's Moonraker, which
+the stock package does not carry: the mod's build stays, it works, and Mainsail
+is happy with it. The details, and the ladder below it, are in
 [Support](support.md).
