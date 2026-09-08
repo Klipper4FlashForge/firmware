@@ -1,0 +1,21 @@
+#!/bin/sh
+# Re-run the link pass after this package's payload has landed.
+#
+# WHY THIS PACKAGE NEEDS IT. anvil-link-prog.sh restores FlashForge's chelper
+# from $MODDIR/prog/stock-chelper, and that directory is shipped HERE -- it is
+# a MIPS c_helper.so beside its sources, so it cannot live in anvil-core,
+# which is Architecture: all. anvil-core's own postinst calls the script too,
+# and opkg installs it first: on an upgrade that lands a new stock-chelper,
+# that earlier pass ran before the file existed.
+#
+# Cheap and quiet on a re-run: the restore compares md5 first and returns
+# without touching anything when the live copy is already FlashForge's.
+set -e
+
+MODDIR=/usr/data/anvil
+
+if [ -x "$MODDIR/bin/anvil-link-prog.sh" ]; then
+    "$MODDIR/bin/anvil-link-prog.sh"
+fi
+
+exit 0

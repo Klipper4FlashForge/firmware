@@ -267,6 +267,78 @@ def test_a_link_left_at_that_path_is_replaced_with_flashforges_own(box):
         "%s, expected %s" % (DAEMON, got, STOCK_DAEMON_MD5))
 
 
+def test_our_chelper_is_replaced_with_flashforges(box):
+    """chelper/__init__.py and c_helper.so are one unit, and a stock flash
+    restores only the second.
+
+    Their `extruder_set_pressure_advance` takes three arguments and ours takes
+    four, so a printer left with our cdefs and their library fails at the first
+    extruder -- after it has been flashed back to stock, with nothing left to
+    flash. Their __init__.py is also upstream's, `check_build_code` and all: a
+    .c newer than c_helper.so sends klippy to a compiler the printer does not
+    have, which is why the whole directory goes back rather than two files.
+
+    Planted here, because the machine this runs on took a release that ships
+    no software component and so never had ours.
+    """
+    live = "/usr/prog/klipper/klippy/chelper"
+    ours = "%s/klipper/klippy/chelper" % MODDIR
+    shipped = "%s/prog/stock-chelper" % MODDIR
+
+    planted = box.sh("rm -rf %s && cp -a %s %s && ls %s/*.c >/dev/null"
+                     % (live, ours, live, live))
+    assert planted.ok, "could not plant our chelper: %s" % planted.text
+    before = box.sh("md5sum < %s/__init__.py" % live).out.strip()
+    theirs = box.sh("md5sum < %s/__init__.py" % shipped).out.strip()
+    assert before != theirs, (
+        "the planted chelper is already FlashForge's, so this test would pass "
+        "without the restore doing anything")
+
+    run = box.sh("sh %s/bin/anvil-link-prog.sh" % MODDIR, timeout=300)
+    assert run.ok, "anvil-link-prog.sh failed: %s" % run.text
+
+    after = box.sh("md5sum < %s/__init__.py" % live).out.strip()
+    assert after == theirs, (
+        "%s/__init__.py is still not FlashForge's, so their c_helper.so would "
+        "be called with our cdefs. What the script said:\n%s" % (live, run.text))
+
+    # c_helper.so must be the newest file in there, or their own __init__.py
+    # decides the library is stale and tries to build one.
+    newer = box.sh("find %s -newer %s/c_helper.so -type f" % (live, live)).out.split()
+    assert not newer, (
+        "these files are newer than c_helper.so, so klippy would shell out to "
+        "mips-linux-gnu-gcc on a printer with no compiler: %s" % newer)
+
+
+def test_a_newer_flashforge_chelper_is_left_alone(box):
+    """The copy shipped here is 1.9.7's. A printer on something newer keeps
+    what it has -- overwriting it would be this same bug, pointed the other
+    way."""
+    live = "/usr/prog/klipper/klippy/chelper"
+    ours = "%s/klipper/klippy/chelper" % MODDIR
+    software = "/usr/prog/PROGRAM/software"
+
+    box.sh("rm -rf %s && cp -a %s %s" % (live, ours, live))
+    marker = box.sh("md5sum < %s/__init__.py" % live).out.strip()
+    planted = box.sh("mkdir -p %s/9.9.9" % software)
+    assert planted.ok, "could not plant a newer version directory"
+    try:
+        run = box.sh("sh %s/bin/anvil-link-prog.sh" % MODDIR, timeout=300)
+        assert run.ok, "anvil-link-prog.sh failed: %s" % run.text
+        after = box.sh("md5sum < %s/__init__.py" % live).out.strip()
+        assert after == marker, (
+            "the restore ran on a printer reporting FlashForge 9.9.9 and "
+            "replaced files newer than the copy this package carries:\n%s"
+            % run.text)
+        assert "9.9.9" in run.text, (
+            "it left the directory alone but said nothing about why, so an "
+            "owner reading the log cannot tell this from a no-op:\n%s" % run.text)
+    finally:
+        box.sh("rm -rf %s/9.9.9" % software)
+        # Leave the machine as the rest of this module expects it.
+        box.sh("sh %s/bin/anvil-link-prog.sh >/dev/null 2>&1" % MODDIR)
+
+
 def test_every_installed_script_parses_under_the_printers_busybox(box):
     """Every shell script the mod put on the machine, with the shell that will
     actually run it. A bashism here is a service that dies at boot."""
