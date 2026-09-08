@@ -149,6 +149,106 @@ restore_stock_daemon() {
 }
 restore_stock_daemon
 
+# ---- FlashForge's chelper ---------------------------------------------------
+#
+# klippy loads chelper/__init__.py for its cffi cdefs and dlopens c_helper.so
+# beside it, so the two are one unit: their 1.9.7 declares
+#
+#     void extruder_set_pressure_advance(struct stepper_kinematics *sk
+#         , double pressure_advance, double smooth_time);
+#
+# and ours takes a fourth argument. A stock flash restores c_helper.so, out of
+# the chelper.tar in its software component, and nothing else in that
+# directory -- not __init__.py, not the .c sources. A printer that took a
+# release whose software component carried our klippy therefore ends up with
+# our cdefs against their library, and their extruder.py calling it their way:
+# "expects 4 arguments, got 3", at the first extruder, on a machine that has
+# already been flashed back to stock and has nothing left to flash.
+#
+# THE SOURCES MATTER AS MUCH AS THE TWO FILES. Their __init__.py is upstream's,
+# check_build_code and all: any .c newer than c_helper.so and klippy shells out
+# to mips-linux-gnu-gcc, which no printer has. So the whole directory is put
+# back, ours removed with it, and c_helper.so is touched last so it is the
+# newest thing there.
+#
+# ONLY UP TO 1.9.7, which is the firmware this copy came off. A newer
+# FlashForge release may ship a different pair, and overwriting it would plant
+# the same landmine the other way round -- so an unreadable version or a newer
+# one is left alone. The version is FlashForge's own: no package of ours ships
+# a software component, so /usr/prog/PROGRAM/software still names theirs.
+CHELPER_MAX_STOCK=1.9.7
+
+# True when $1 is greater than $2, field by field and numerically: a string
+# compare puts 1.9.10 below 1.9.6.
+ver_gt() {
+    awk -v a="$1" -v b="$2" 'BEGIN {
+        na = split(a, x, "."); nb = split(b, y, ".")
+        n = (na > nb) ? na : nb
+        for (i = 1; i <= n; i++) {
+            u = (i <= na) ? x[i] + 0 : 0
+            v = (i <= nb) ? y[i] + 0 : 0
+            if (u > v) exit 0
+            if (u < v) exit 1
+        }
+        exit 1
+    }'
+}
+
+stock_version() {
+    _best=''
+    for _d in /usr/prog/PROGRAM/software/*; do
+        [ -d "$_d" ] || continue
+        _v=$(basename "$_d")
+        # Numbers and dots only: firmwareExe lives in that directory too, and
+        # a name this cannot read is not a version to compare against.
+        case "$_v" in ''|*[!0-9.]*) continue ;; esac
+        if [ -z "$_best" ] || ver_gt "$_v" "$_best"; then _best=$_v; fi
+    done
+    printf '%s' "$_best"
+}
+
+restore_stock_chelper() {
+    dst=/usr/prog/klipper/klippy/chelper
+    src=$MODDIR/prog/stock-chelper
+
+    [ -f "$src/__init__.py" ] || return 0
+    [ -d "$dst" ] || return 0
+
+    # Already theirs: nothing to do, and this is the common case on every
+    # printer that never took one of those releases.
+    if [ "$(md5sum < "$dst/__init__.py")" = "$(md5sum < "$src/__init__.py")" ]; then
+        return 0
+    fi
+
+    _ver=$(stock_version)
+    if [ -z "$_ver" ]; then
+        echo "link-prog: chelper differs from FlashForge's and their version is"
+        echo "link-prog: unreadable -- leaving $dst alone"
+        return 0
+    fi
+    if ver_gt "$_ver" "$CHELPER_MAX_STOCK"; then
+        echo "link-prog: chelper differs from FlashForge's, but this printer runs"
+        echo "link-prog: $_ver and this copy is $CHELPER_MAX_STOCK -- leaving $dst alone"
+        return 0
+    fi
+
+    # Beside it and then renamed, so a half-copied directory is never the one
+    # klippy would find. The old one goes after the swap, not before.
+    rm -rf "$dst.anvil-new" "$dst.anvil-old"
+    if mkdir -p "$dst.anvil-new" && cp "$src"/* "$dst.anvil-new/" &&
+       touch "$dst.anvil-new/c_helper.so" &&
+       mv "$dst" "$dst.anvil-old" && mv "$dst.anvil-new" "$dst"; then
+        rm -rf "$dst.anvil-old"
+        echo "link-prog: $dst restored to FlashForge's $_ver"
+    else
+        rm -rf "$dst.anvil-new"
+        [ -d "$dst.anvil-old" ] && [ ! -d "$dst" ] && mv "$dst.anvil-old" "$dst"
+        rm -rf "$dst.anvil-old"
+        echo "link-prog: !! could not restore $dst" >&2
+    fi
+}
+restore_stock_chelper
+
 # ---- the live config directory ---------------------------------------------
 #
 # SEEDED ONCE, from whatever the machine has. The set of files is not ours to

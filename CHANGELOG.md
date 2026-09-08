@@ -47,6 +47,16 @@ Release preparation and documentation sweep.
   fatal. Calibration and config edits made under Reforge stay in Reforge's
   directory and come back with it; a stock flash returns the machine to the
   `printer.cfg` it had before.
+- FlashForge's `chelper` is put back on a printer that took one of the two
+  releases whose software component carried our Klipper (`v20260827` and
+  `v20260827b`). Those replaced `/usr/prog/klipper/klippy`, and a stock flash
+  restores `c_helper.so` but not the `chelper/__init__.py` that declares what
+  is in it — ours takes a fourth argument for `extruder_set_pressure_advance`,
+  so a printer flashed back to stock failed at the first extruder. The whole
+  directory is restored, with `c_helper.so` left newest so their own
+  `check_build_code` does not send klippy to a compiler no printer has. Only
+  on machines running FlashForge 1.9.7 or older, which is the firmware this
+  copy came from; a newer one is left alone.
 - A printer that took an earlier release has FlashForge's `klipperDaemon` put
   back for it. That file is the one thing a stock flash cannot restore — their
   package carries no copy — so a machine whose copy was replaced could not be

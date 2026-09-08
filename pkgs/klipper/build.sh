@@ -64,11 +64,19 @@ for _e in "$PKG_DIR"/payload/klipper/klippy/extras/ff_*.py; do
     pkg_stage "$_e" "klipper/klippy/extras/$(basename "$_e")"
 done
 
+# FLASHFORGE'S OWN chelper, at $MODDIR/prog/stock-chelper and never on klippy's
+# path. anvil-link-prog.sh puts it back over /usr/prog/klipper/klippy/chelper
+# on a printer whose copy is ours: their c_helper.so is restored by any stock
+# flash and the __init__.py declaring its cdefs is not, and the two disagree
+# about extruder_set_pressure_advance. It rides in THIS package because it is
+# a MIPS object and anvil-core is Architecture: all.
+pkg_stage "$PKG_DIR/payload/prog/stock-chelper" "prog/stock-chelper"
+
 # The __pycache__ sweep that used to be here is pkg_ship's now. It was
 # written twice, here and in pkgs/moonraker, and the recipe that needed it
 # most did not have it: anvil-core stages a directory of .py helpers and was
 # shipping bytecode whenever a test had imported one of them.
-pkg_ship "klipper"
+pkg_ship "klipper" "prog/stock-chelper"
 
 # --------------------------------------------------------------- no gate here
 # This recipe checks nothing about the object it just built, and both halves of
