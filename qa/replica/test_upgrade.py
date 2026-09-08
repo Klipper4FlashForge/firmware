@@ -75,6 +75,11 @@ SOURCE = ROOT / "installer" / "runFirmwareExe.sh"
 BUILD = "/tmp/anvil-qa"
 MODTAR = "/usr/data/update/anvil.tar.xz"
 
+# Where FlashForge's software component lands, one directory named for its
+# version. The installer reads the version out of it to decide whether this
+# printer is new enough to install on.
+SOFTWARE = "/usr/prog/PROGRAM/software"
+
 # Under qemu, tar + a few hundred forks of the printer's busybox. Measured runs
 # are seconds; this is the "something wedged" line, not an expectation.
 INSTALL_T = 300
@@ -440,3 +445,115 @@ def test_the_installer_still_makes_bin_executable(upgraded):
     assert upgraded.file(MODDIR + "/bin/anvil-hello").executable, (
         "%s/bin/anvil-hello is not executable -- nothing in bin/ would run"
         % MODDIR)
+
+
+# ------------------------------------------------- the stock firmware gate
+#
+# The replica is a real machine in the way that matters here: its
+# /usr/prog/PROGRAM/software holds FlashForge's own version directory, 1.9.7,
+# put there by the factory image rather than by anything of ours. So "current
+# firmware installs" needs no setup at all, and only the refusal has to be
+# staged -- by swapping that directory for one holding an older version.
+
+# Where the version directory is moved to while an old one stands in for it.
+# /tmp, so a run that dies between the swap and the restore leaves the machine
+# repairable and the next boot of the replica clean.
+SOFTWARE_SAVED = "/tmp/anvil-qa-software"
+
+
+def test_a_current_stock_firmware_installs(upgraded):
+    """The control, and the half that can go red for a reason worth knowing: a
+    gate that refuses everything would pass the refusal test below and brick
+    every install. This is the machine as it comes -- FlashForge 1.9.7, no
+    planting -- so what it measures is the gate letting a normal printer
+    through."""
+    box = upgraded
+    # Directories whose name is a version, which is what the installer reads:
+    # firmwareExe sits in here too -- it is the file anvil-link-prog.sh
+    # symlinks -- and a naive `ls` picks it up.
+    version = box.sh(
+        "for d in %s/*; do [ -d \"$d\" ] || continue; basename \"$d\"; done"
+        r" | grep -E '^[0-9]+(\.[0-9]+)*$'" % SOFTWARE).text.strip()
+    assert version, (
+        "no version directory in %s on this replica, so neither this test nor "
+        "the refusal below is asking anything about a version" % SOFTWARE)
+
+    box.sh(": > %s" % LOG)
+    run = box.sh("sh %s" % INSTALLER, timeout=INSTALL_T)
+    assert run.ok, (
+        "the installer refused a printer on FlashForge %s:\n%s"
+        % (version, run.text))
+    assert version in run.text, (
+        "the installer did not report the version it read (%s), so the gate "
+        "may not have looked at all:\n%s" % (version, run.text))
+    log = box.file(LOG).text
+    assert "mod payload installed" in log, (
+        "%s was accepted but nothing installed. Tail of %s:\n%s"
+        % (version, LOG, _tail(log)))
+
+
+def test_an_old_stock_firmware_refuses_the_install(upgraded):
+    """FlashForge 1.9.4 and older pair with board firmware klippy cannot talk
+    to, and a printer that installs this on top of one does not come up at
+    all: no MCU, so no Klipper, no screen and no Mainsail. The gate turns that
+    into a refusal with the fix in it.
+
+    Asked of a machine that HAS a payload waiting -- the tests above left one
+    on disk and $MODDIR full -- so this is the installer declining to install
+    something rather than finding nothing to do. The log is truncated first
+    and must stay empty: the gate runs before the installer redirects its
+    output into the log, so anything appearing there is an install that got
+    past it and started anyway.
+    """
+    box = upgraded
+    staged = box.sh(
+        "set -e\n"
+        "rm -rf %(saved)s\n"
+        "mkdir -p %(saved)s\n"
+        # The real version directory goes aside whole: leaving it beside the
+        # planted one would test the highest-wins rule instead, which is the
+        # test after this.
+        "mv %(sw)s/* %(saved)s/ 2>/dev/null || true\n"
+        "mkdir -p %(sw)s/1.9.4\n"
+        % {"sw": SOFTWARE, "saved": SOFTWARE_SAVED})
+    if not staged.ok:
+        pytest.fail("could not stage an old stock firmware: %s" % staged.text)
+    try:
+        box.sh(": > %s" % LOG)
+        run = box.sh("sh %s" % INSTALLER, timeout=INSTALL_T)
+        assert not run.ok, (
+            "the installer accepted a printer on FlashForge 1.9.4 (exit 0), "
+            "and app_startup.sh reads that as a flash that worked:\n%s"
+            % run.text)
+        assert "1.9.4" in run.text and "1.9.6" in run.text, (
+            "the refusal names neither the version found nor the one needed, "
+            "so nobody can act on it:\n%s" % run.text)
+        assert box.file(LOG).text.strip() == "", (
+            "the installer wrote to %s, so it got past the gate and started "
+            "installing:\n%s" % (LOG, _tail(box.file(LOG).text)))
+    finally:
+        box.sh(
+            "rm -rf %(sw)s/1.9.4\n"
+            "mv %(saved)s/* %(sw)s/ 2>/dev/null || true\n"
+            "rmdir %(saved)s 2>/dev/null || true\n"
+            % {"sw": SOFTWARE, "saved": SOFTWARE_SAVED})
+
+
+def test_a_leftover_old_version_directory_does_not_refuse(upgraded):
+    """install_component wipes the previous version before renaming the new one
+    in, so there is normally exactly one directory here -- but a machine that
+    was interrupted mid-install can hold two, and the older one must not be
+    what the gate reads. The highest wins, so a stale 1.9.4 beside the real
+    1.9.7 changes nothing."""
+    box = upgraded
+    planted = box.sh("mkdir -p %s/1.9.4" % SOFTWARE)
+    if not planted.ok:
+        pytest.fail("could not plant a stale version: %s" % planted.text)
+    try:
+        box.sh(": > %s" % LOG)
+        run = box.sh("sh %s" % INSTALLER, timeout=INSTALL_T)
+        assert run.ok, (
+            "a leftover 1.9.4 directory beside the real version refused the "
+            "install:\n%s" % run.text)
+    finally:
+        box.sh("rm -rf %s/1.9.4" % SOFTWARE)

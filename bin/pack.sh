@@ -148,6 +148,20 @@ fi
 # (the file must already exist -- ffscreen.py refuses to write a device/path
 # that isn't there yet -- so `touch installer/start.img` first if recreating.)
 cp -f installer/start.img work/stage/start.img
+# The other frame the installer can put on the panel: the firmware-too-old
+# refusal. It ships beside start.img because the refusal happens on the
+# machine, before anything is installed, and a panel that stays on the boot
+# logo is a flash that silently did nothing.
+#
+# THE VERSION IN IT IS DRAWN, not substituted -- pixels, not text -- so it has
+# to be regenerated when MIN_STOCK_VER in installer/runFirmwareExe.sh changes:
+#   touch installer/stock-too-old.img
+#   python3 pkgs/anvil-core/payload/bin/ffscreen.py --fb installer/stock-too-old.img \
+#       --size 480x800@32 --fault --title "Reforge" --status "NOT INSTALLED" \
+#       --detail "UPDATE FLASHFORGE FIRMWARE FIRST, THEN FLASH THIS AGAIN" \
+#       --note "NEEDS 1.9.6 OR NEWER -- NOTHING WAS CHANGED"
+# ./bin/preview-boot-screen.py renders frames like it to PNG to look at.
+cp -f installer/stock-too-old.img work/stage/stock-too-old.img
 for f in end.img play; do
     [ -f "work/outer/$f" ] && cp -f "work/outer/$f" work/stage/
 done

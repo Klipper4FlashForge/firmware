@@ -79,6 +79,111 @@ case "$MODDIR" in
     *) echo "refusing to run: MODDIR='$MODDIR' is not under /usr/data"; exit 1 ;;
 esac
 
+# ---- the stock firmware this printer is running ----------------------------
+#
+# A printer still on FlashForge 1.9.4 does not come up on this package: the
+# board firmware that release pairs with differs from the one klippy is built
+# to talk to, and the MCU never connects. The failure is at the bottom of the
+# stack -- no Klipper, so no UI and no Mainsail -- and it looks exactly like a
+# bad flash to the person holding the USB stick.
+#
+# So it is refused HERE, before anything is written, with the fix in the
+# message: install FlashForge's own current firmware first, then this package.
+# That path costs one more flash and leaves a working printer either way,
+# which is the whole reason for the gate.
+#
+# WHAT IS READ. /usr/prog/PROGRAM/software holds exactly one directory, named
+# for the version of FlashForge's software component -- install_component
+# below wipes the previous one before renaming the new one into place. That is
+# the version an owner sees on the screen, and no package of ours ever ships a
+# software component, so it goes on describing the printer rather than the
+# mod. The highest is taken when there is somehow more than one, so a stale
+# leftover cannot refuse an install that should go ahead.
+MIN_STOCK_VER=1.9.6
+
+# True when $1 sorts BELOW $2, comparing dot-separated fields numerically:
+# a plain string compare makes 1.9.10 older than 1.9.6, and busybox `sort -V`
+# is not something to rely on here.
+ver_lt() {
+    awk -v a="$1" -v b="$2" 'BEGIN {
+        na = split(a, x, "."); nb = split(b, y, ".")
+        n = (na > nb) ? na : nb
+        for (i = 1; i <= n; i++) {
+            u = (i <= na) ? x[i] + 0 : 0
+            v = (i <= nb) ? y[i] + 0 : 0
+            if (u < v) exit 0
+            if (u > v) exit 1
+        }
+        exit 1
+    }'
+}
+
+STOCK_VER=''
+for _d in "$RUN_DIR"/software/*; do
+    [ -d "$_d" ] || continue
+    _v=`basename "$_d"`
+    # Numbers and dots only. A name this cannot read is not a version, and
+    # guessing at one would be a gate that refuses installs for its own
+    # reasons.
+    case "$_v" in ''|*[!0-9.]*) continue ;; esac
+    if [ -z "$STOCK_VER" ] || ver_lt "$STOCK_VER" "$_v"; then
+        STOCK_VER=$_v
+    fi
+done
+unset _d _v
+
+if [ -z "$STOCK_VER" ]; then
+    # UNKNOWN IS NOT REFUSED. The two failures are not the same size: letting
+    # an unreadable version through costs a printer that has to be flashed
+    # back to stock, while refusing on one would brick the install path on
+    # every machine whose layout is not the one read above.
+    echo "Stock firmware version: unknown -- installing anyway."
+    echo "If this printer is older than FlashForge $MIN_STOCK_VER, update it first."
+elif ver_lt "$STOCK_VER" "$MIN_STOCK_VER"; then
+    echo "This printer is running FlashForge $STOCK_VER."
+    echo "This package needs FlashForge $MIN_STOCK_VER or newer: on $STOCK_VER the"
+    echo "board firmware and Klipper do not agree and the printer does not start."
+    echo
+    echo "Install FlashForge's own current firmware first, then flash this again."
+    echo "Nothing was changed on the printer."
+    # THE PANEL, because the console this printed to is not something the
+    # owner can see, and the printer goes on booting after the non-zero exit
+    # below -- so from the outside the flash would just have done nothing.
+    # This is the same raw framebuffer dump start.img is, rendered by the same
+    # ffscreen.py, and it says the version needed and that nothing changed.
+    # Guarded because a package need not carry it.
+    #
+    # It stays up until something else paints: app_startup.sh carries on
+    # booting into the printer's own UI, which is the honest picture --
+    # unmodded printer, message on top of it.
+    [ -f "$WORK_DIR/stock-too-old.img" ] &&
+        cat "$WORK_DIR/stock-too-old.img" > /dev/fb0 2>/dev/null
+    # And on the stick, which is the copy that survives the power cycle.
+    # /mnt is where app_startup.sh mounted it, and where the installer leaves
+    # the root password too.
+    if [ -d /mnt ]; then
+        {   echo "anvil -- this package was NOT installed"
+            echo
+            echo "This printer is running FlashForge firmware $STOCK_VER, and this"
+            echo "package needs $MIN_STOCK_VER or newer. On older firmware the board"
+            echo "firmware and Klipper do not agree, the printer does not start,"
+            echo "and the only way out is flashing stock again."
+            echo
+            echo "WHAT TO DO"
+            echo "  1. Install FlashForge's current firmware for this printer,"
+            echo "     the normal way -- from their package on a USB stick."
+            echo "  2. Flash this package again."
+            echo
+            echo "Nothing on the printer was changed. It boots as it did before."
+        } > /mnt/anvil-NOT-INSTALLED.txt 2>/dev/null
+        sync
+    fi
+    exit 1
+else
+    echo "Stock firmware $STOCK_VER -- ok (needs $MIN_STOCK_VER or newer)."
+fi
+
+
 # The panel, for as long as this takes. Guarded because a package need not
 # carry the images; unguarded, a missing one would be the first thing in the
 # log rather than the install.

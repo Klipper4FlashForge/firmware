@@ -14,8 +14,12 @@ Before you flash anything:
       printer is back to how it was. That is the only recovery step needing
       nothing but a USB port — no ssh, no screen. The stock packages are
       published at [ghzserg/FF](https://github.com/ghzserg/FF/releases).
-- [ ] **Your printer's model**, from Settings → About. A package for the
-      other model is refused, and it is not a valid recovery image either.
+- [ ] **Your printer's model and firmware version**, both from Settings →
+      About. A package for the other model is refused, and so is a printer on
+      FlashForge firmware older than **1.9.6** — see [Your printer's firmware
+      has to be 1.9.6 or newer](#your-printers-firmware-has-to-be-196-or-newer)
+      below. A package for the other model is not a valid recovery image
+      either.
 - [ ] **The printer's IP address**, and a machine that can reach it.
 - [ ] Time to stand at the machine. The first print after a flash is not
       something to start and walk away from.
@@ -38,6 +42,37 @@ nothing" — so pick the file whose name matches your machine on the
 | Creator 5 Pro | `Creator5Pro-anvil-<date>.tgz` |
 
 Not sure which you have? On the printer: **Settings → About**.
+
+---
+
+## Your printer's firmware has to be 1.9.6 or newer
+
+Check **Settings → About** on the printer. If the firmware version there
+starts with anything below 1.9.6, install FlashForge's own current firmware
+first — Reforge will not install until you do.
+
+The reason is the board firmware. On those older releases the boards inside
+the printer speak a different dialect to the one Reforge's Klipper expects,
+and the printer comes up with no motion and no screen at all. Rather than let
+that happen, the flash stops and tells you, and the printer boots as it did
+before:
+
+<img src="boot-screen/stock-too-old.png" width="70%" alt="The printer's screen after a refused flash: Reforge, not installed, update FlashForge firmware first, then flash this again. Needs 1.9.6 or newer. Nothing was changed.">
+
+FlashForge's own package updates the boards for you. Download the one for your
+model:
+
+| Your printer | FlashForge 1.9.7 |
+|---|---|
+| Creator 5 | [`Creator5-1.9.7-1.2.9-20260810.tgz`](https://github.com/ghzserg/FF/releases/download/R/Creator5-1.9.7-1.2.9-20260810.tgz) |
+| Creator 5 Pro | [`Creator5Pro-1.9.7-1.2.9-20260810.tgz`](https://github.com/ghzserg/FF/releases/download/R/Creator5Pro-1.9.7-1.2.9-20260810.tgz) |
+
+It installs exactly the way Reforge does — stick in, power on, wait — so the
+steps below work for it too. Let it finish and reboot, check Settings → About
+again, then flash Reforge.
+
+Keep that file. It is also the undo button: flashing it puts the printer back
+to stock whenever you want it back.
 
 ---
 

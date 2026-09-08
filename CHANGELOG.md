@@ -8,6 +8,17 @@ both printer models or through every real-world workflow.
 
 Release preparation and documentation sweep.
 
+### Added
+
+- The installer refuses to install on a printer running FlashForge firmware
+  older than 1.9.6, and says to install FlashForge's current firmware first.
+  On those releases the board firmware and Klipper do not agree, the MCU never
+  connects, and the printer comes up with no Klipper and no screen — which
+  looks like a bad flash rather than a mismatch. Nothing is written to the
+  printer when the gate refuses: it puts the reason on the panel, leaves
+  `anvil-NOT-INSTALLED.txt` on the USB stick, and the printer boots as it did
+  before. A version it cannot read is installed on, as before.
+
 ### Changed
 
 - Klipper's and Moonraker's config now live in Reforge's own directory,
