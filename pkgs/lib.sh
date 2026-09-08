@@ -50,6 +50,28 @@ pkg_payload_hash() {
         | sha256sum | cut -c1-16
 }
 
+# pkg_release_stamp -> the packaging revision for a recipe whose VERSION is an
+# upstream pin but whose contents are partly this repo's.
+#
+# apk decides whether to upgrade from the version string alone, and for those
+# recipes the string does not move when our files change: anvil-moonraker is
+# `0.11.0` whatever we ship beside upstream's tree, anvil-klipper is the
+# pinned commit whatever our klippy extras say. The revision is what moves, so
+# it is the release date rather than a number somebody has to remember to
+# raise -- a printer on any earlier release sees a higher `-r` and upgrades.
+#
+# THE TRAILING LETTER IS A SAME-DAY RE-RELEASE (20260827b, and there were four
+# that day). apk compares `-r` numerically, so the letter becomes a digit
+# after the date rather than beside it: 20260827 -> 202608270, `b` ->
+# 202608272, and the next day's 202608280 is still larger. Appending the
+# letter's index without the extra place would order 20260827b above 20260828.
+pkg_release_stamp() {
+    _d=${MOD_VER%%[a-z]}
+    _l=${MOD_VER#"$_d"}
+    printf '%s%s' "$_d" "$(awk -v l="$_l" \
+        'BEGIN { print (l == "") ? 0 : index("abcdefghijklmnopqrstuvwxyz", l) }')"
+}
+
 # pkg_signkey_hash -> a cache key for the feed's public key, or `unsigned`.
 #
 # anvil-core ships that key, and it lives OUTSIDE the repo, so

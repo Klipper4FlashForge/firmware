@@ -889,6 +889,16 @@ yesterday would resolve and install yesterday's `anvil-core` without
 complaint. `patch.sh` checks for the expected filename before installing and
 names `./bin/build-packages.sh` if it is absent.
 
+The recipes whose version is a **pin** have the opposite problem.
+`anvil-moonraker`, `anvil-klipper`, `anvil-helixscreen` and `anvil-timelapse`
+ship files of ours beside an upstream tree, and apk decides whether to upgrade
+from the version string alone: a change under `payload/` is new bytes under an
+old name, so a printer already holding that version keeps what it has.
+`PKG_RELEASE` is the field that moves — raise it when `payload/` changes, and
+back to 1 when the pin itself moves. `PKG_STAMP_EXTRA="$(pkg_payload_hash)"`
+is a different mechanism for a different reader: it makes *this build* notice
+the edit and rebuild. It does not make a printer notice it.
+
 The model is the one fact opkg cannot work out for itself: both chamber
 configs are built every time, they own the same `config/printer.chamber.cfg`,
 and they `Conflict`. opkg refuses the pair with exit 255 — measured — so

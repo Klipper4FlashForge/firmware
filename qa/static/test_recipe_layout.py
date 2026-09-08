@@ -19,6 +19,7 @@ legitimately changed, which is the opposite of what a test is for.
 What is left is the two that bite:
 """
 import os
+import re
 
 import pytest
 
@@ -126,3 +127,42 @@ def test_klipper_still_depends_on_numpy():
         "lost feature -- klippy loads [stepper_resonance_tester] from "
         "FlashForge's printer.vibration.cfg and dies on the ImportError, so "
         "the printer never reaches ready.")
+
+
+def test_a_pinned_recipe_that_ships_our_files_versions_on_the_release():
+    """A recipe apk can never see a change in is a recipe printers never update.
+
+    Two kinds of recipe live under pkgs/. One versions on `$MOD_VER`, the
+    release date, so every build says something new. The other pins an
+    upstream version -- `${MOONRAKER_VERSION#v}`, the Klipper commit, the
+    HelixScreen tag -- and that string stays put however much of OUR half of
+    the package changes, because `payload/` is ours. apk compares the version
+    and nothing else: same string, no upgrade, whatever the bytes say.
+
+    `PKG_STAMP_EXTRA="$(pkg_payload_hash)"` does not help here and reads as
+    though it should. It hashes `payload/` so the BUILD rebuilds the package;
+    it says nothing to a printer.
+
+    So a pinned recipe with a `payload/` directory takes its revision from
+    `pkg_release_stamp` -- the release date, monotone, and nobody's to
+    remember. This test is what makes that the rule rather than a habit.
+    """
+    missing = []
+    for name, d in recipes():
+        if not os.path.isdir(os.path.join(d, "payload")):
+            continue                      # ships nothing of ours to go stale
+        conf = open(os.path.join(d, "pkg.conf")).read()
+        version = re.search(r"^PKG_VERSION=(.*)$", conf, re.M)
+        release = re.search(r"^PKG_RELEASE=(.*)$", conf, re.M)
+        if version and "MOD_VER" in version.group(1):
+            continue                      # the whole version is the release
+        if not release or "pkg_release_stamp" not in release.group(1):
+            missing.append("%s (PKG_VERSION=%s, PKG_RELEASE=%s)" % (
+                name,
+                version.group(1) if version else "?",
+                release.group(1) if release else "1 (default)"))
+    assert not missing, (
+        "these recipes pin an upstream version and ship a payload/ of ours, so "
+        "a change to our half leaves the version they had -- and no printer "
+        "upgrades: %s. Set PKG_RELEASE=\"$(pkg_release_stamp)\"."
+        % ", ".join(missing))
