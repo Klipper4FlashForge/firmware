@@ -62,6 +62,10 @@ FE = "/usr/prog/PROGRAM/software/firmwareExe"
 # The other two stock paths anvil-link-prog.sh owns.
 START = "/usr/prog/klipper/start.sh"
 DAEMON = "/usr/prog/klipper/klipperDaemon"
+# FlashForge's own, off a factory /usr/prog. anvil-core ships this copy at
+# $MODDIR/prog/stock-klipperDaemon and restores it; a machine holding
+# anything else at that path is running a script no printer shipped with.
+STOCK_DAEMON_MD5 = "773741f6a2df3231cd52a3f441014037"
 APP = "/usr/prog/app_startup.sh"
 SOURCE = MODDIR + "/etc/s6-rc/source"
 DB = MODDIR + "/etc/s6-rc/compiled/current"
@@ -229,6 +233,38 @@ def test_klipperdaemon_is_still_flashforges_own(box):
     assert "start-stop-daemon" in daemon.text, (
         "%s is not FlashForge's own script -- it has no start-stop-daemon "
         "line: %r" % (DAEMON, daemon.text[:400]))
+
+
+def test_a_link_left_at_that_path_is_replaced_with_flashforges_own(box):
+    """An upgrade puts FlashForge's file back, so the machine can go to stock.
+
+    A printer that took a release which owned that path carries a symlink into
+    $MODDIR, and nothing in a stock package can undo it -- their package has no
+    klipperDaemon to copy over it, and the copy this machine shipped with is
+    gone. $MODDIR/prog/stock-klipperDaemon is the only copy left, and
+    anvil-link-prog.sh restores it on every install and every `apk upgrade`.
+
+    The link is planted here rather than waited for, because the machine this
+    runs on installed a release that never made one. What is under test is the
+    script in the payload, run the way an upgrade runs it.
+    """
+    link = "%s/prog/klipperDaemon" % MODDIR          # ships nowhere; dangles
+    planted = box.sh("rm -f %s && ln -s %s %s && readlink %s"
+                     % (DAEMON, link, DAEMON, DAEMON))
+    assert planted.ok, "could not plant the link: %s" % planted.text
+
+    run = box.sh("sh %s/bin/anvil-link-prog.sh" % MODDIR, timeout=300)
+    assert run.ok, "anvil-link-prog.sh failed: %s" % run.text
+
+    kind = box.sh("if [ -L %s ]; then echo link; elif [ -f %s ]; then echo file; "
+                  "else echo missing; fi" % (DAEMON, DAEMON)).out.strip()
+    assert kind == "file", (
+        "%s is %s after the upgrade, so this printer still cannot be returned "
+        "to stock. What the script said:\n%s" % (DAEMON, kind, run.text))
+    got = box.sh("md5sum %s" % DAEMON).out.split()[0]
+    assert got == STOCK_DAEMON_MD5, (
+        "%s was replaced with something that is not FlashForge's script: md5 "
+        "%s, expected %s" % (DAEMON, got, STOCK_DAEMON_MD5))
 
 
 def test_every_installed_script_parses_under_the_printers_busybox(box):

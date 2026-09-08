@@ -23,10 +23,12 @@ waits in `/usr/data/anvil-data/config` for the next time you flash Reforge.
 If your printer went back to stock and came up with a normal-looking screen
 but no Klipper — it will not home, heat or print — it took a Reforge release
 that replaced one of the printer's start-up scripts, and the stock package has
-no copy of that one to put back. Releases after this fix leave it alone; a
-printer already in that state is repaired by the package at
-[Klipper4FlashForge/stock-recovery](https://github.com/Klipper4FlashForge/stock-recovery/releases),
-flashed after the stock one.
+no copy of that one to put back. Flash the package at
+[Klipper4FlashForge/stock-recovery](https://github.com/Klipper4FlashForge/stock-recovery/releases)
+after the stock one and it starts again.
+
+Updating Reforge first avoids that trip entirely: an update puts the file back
+for you, and the printer is then free to go to stock whenever you want.
 
 ---
 

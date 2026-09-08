@@ -52,6 +52,13 @@ pytestmark = pytest.mark.static
 # and says so only in s6's own log.
 SYNTAX_GLOBS = ("bin/*.sh", "pkgs/*/payload/*.sh",
                 "pkgs/*/payload/prog/*.sh", "pkgs/*/payload/prog/firmwareExe",
+                # FlashForge's own klipperDaemon, restored onto printers byte
+                # for byte. It is in the parse list and NOT in the ash list
+                # below: shellcheck reports SC2046 on their `mkdir -p $(dirname
+                # $KLIPPER_LOG)`, and the one thing this file must never get is
+                # an edit -- a printer that runs a lint-fixed copy is running
+                # something no FlashForge machine ever has.
+                "pkgs/*/payload/prog/stock-klipperDaemon",
                 "pkgs/*/payload/etc/s6-rc/" + "source/*/run",
                 "installer/*.sh",
                 "tools/replica/printer/*.sh",

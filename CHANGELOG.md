@@ -47,6 +47,13 @@ Release preparation and documentation sweep.
   fatal. Calibration and config edits made under Reforge stay in Reforge's
   directory and come back with it; a stock flash returns the machine to the
   `printer.cfg` it had before.
+- A printer that took an earlier release has FlashForge's `klipperDaemon` put
+  back for it. That file is the one thing a stock flash cannot restore — their
+  package carries no copy — so a machine whose copy was replaced could not be
+  returned to stock at all. `anvil-core` now ships FlashForge's own and
+  restores it on every install and every `apk upgrade`, so one update is
+  enough; owners who have already rolled back are served by the package at
+  [Klipper4FlashForge/stock-recovery](https://github.com/Klipper4FlashForge/stock-recovery).
 - Going back to stock works again. The mod no longer replaces
   `/usr/prog/klipper/klipperDaemon` with a shim of its own. That link was the
   one thing a stock FlashForge flash could not undo — their package carries no
