@@ -185,14 +185,10 @@ def test_the_stock_paths_are_symlinks_into_the_payload(box):
     the last install happened to leave there while an upgrade quietly rewrote
     $MODDIR.
 
-    klipperDaemon is here for a second reason. It was hand-copied by the
-    installer until the nice value it carried went away, and the guard on that
-    copy named a path the file had stopped shipping at -- so for several
-    releases the block was skipped in silence and every printer kept
-    FlashForge's own, whose `start` forks a second unsupervised klippy beside
-    the s6 one. A link cannot be skipped in silence.
+    The two paths the mod owns. FlashForge's klipperDaemon is not one of
+    them and is asserted separately below.
     """
-    for path in (FE, START, DAEMON):
+    for path in (FE, START):
         target = box.sh("readlink %s 2>/dev/null" % path).out.strip()
         assert target, (
             "%s is not a symlink -- anvil-link-prog.sh did not run, so an "
@@ -206,22 +202,33 @@ def test_the_stock_paths_are_symlinks_into_the_payload(box):
             % (path, target))
 
 
-def test_the_klipper_daemon_shim_refuses_to_start_a_second_klippy(box):
-    """The whole point of shipping it. Stock's `start` runs start-stop-daemon
-    -b, which would put an unsupervised klippy next to the supervised one,
-    fighting for /dev/ttyS4 and /tmp/uds. Asked by RUNNING it, because the file
-    being in place says nothing about what it does."""
-    got = box.sh("%s start 2>&1; echo rc=$?" % DAEMON)
-    assert "rc=0" in got.text, (
-        "`klipperDaemon start` did not exit 0 -- a caller that treats failure "
-        "as fatal would break on it: %s" % got.text)
-    assert "supervised" in got.text, (
-        "`klipperDaemon start` did not report that klipper is supervised, so "
-        "this is probably FlashForge's own: %s" % got.text)
-    running = box.pgrep("klippy.py")
-    assert len(running) <= 1, (
-        "`klipperDaemon start` left %d klippy processes running -- the shim "
-        "forked one: %s" % (len(running), [p.cmdline for p in running]))
+def test_klipperdaemon_is_still_flashforges_own(box):
+    """The mod does not touch it, and that is what makes a stock flash work.
+
+    WHAT IT GUARDS. A stock package restores firmwareExe and start.sh,
+    because its run.sh copies its own over them. It has no klipperDaemon to
+    copy -- not in the software component, not in its md5sum.list, no line in
+    run.sh -- so whatever sits at that path survives every stock flash, and
+    stock's start.sh calls it on each boot. A link into $MODDIR there is a
+    printer that comes back from a downgrade with a working screen and no
+    Klipper, permanently.
+
+    Not run, only inspected: executing FlashForge's `start` here would fork an
+    unsupervised klippy beside the s6-supervised one and leave it running for
+    every test after this. What matters is whose file it is.
+    """
+    link = box.sh("readlink %s 2>/dev/null" % DAEMON).out.strip()
+    assert not link.startswith(MODDIR), (
+        "%s points into %s (%r). That link survives a stock flash and stock's "
+        "start.sh then starts no Klipper at all -- the printer comes back with "
+        "a UI and nothing behind it." % (DAEMON, MODDIR, link))
+    daemon = box.file(DAEMON)
+    assert daemon.exists, (
+        "%s is gone. Stock's start.sh calls it, so a printer flashed back to "
+        "stock would have no way to start Klipper." % DAEMON)
+    assert "start-stop-daemon" in daemon.text, (
+        "%s is not FlashForge's own script -- it has no start-stop-daemon "
+        "line: %r" % (DAEMON, daemon.text[:400]))
 
 
 def test_every_installed_script_parses_under_the_printers_busybox(box):

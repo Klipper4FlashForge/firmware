@@ -24,9 +24,10 @@
 #     chamber/<Machine>.cfg
 #   klippy extras                             pkgs/klipper
 #
-# payload/prog/ holds the three files the printer reads from /usr/prog --
-# firmwareExe, start.sh and klipperDaemon -- and this package owns the script
-# that links them there: payload/bin/anvil-link-prog.sh.
+# payload/prog/ holds the two files the printer reads from /usr/prog --
+# firmwareExe and start.sh -- and this package owns the script that links them
+# there: payload/bin/anvil-link-prog.sh. FlashForge's klipperDaemon is not
+# among them and is left alone; that script says why.
 #
 # THE s6-rc SERVICE SOURCE IS HERE and is not compiled by this recipe.
 # payload/etc/s6-rc/source/ is text, and payload/bin/anvil-s6-rc-compile.sh is

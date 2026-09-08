@@ -47,6 +47,18 @@ Release preparation and documentation sweep.
   fatal. Calibration and config edits made under Reforge stay in Reforge's
   directory and come back with it; a stock flash returns the machine to the
   `printer.cfg` it had before.
+- Going back to stock works again. The mod no longer replaces
+  `/usr/prog/klipper/klipperDaemon` with a shim of its own. That link was the
+  one thing a stock FlashForge flash could not undo — their package carries no
+  `klipperDaemon` to copy over it — so stock's `start.sh`, whose last line is
+  `klipperDaemon start`, ran the mod's shim, whose `start` does nothing by
+  design. The printer came back from a stock flash with a working screen and
+  no Klipper behind it, however many times stock was flashed. Nothing on a
+  modded machine called that file: our own `start.sh` replaces stock's and
+  asks s6-rc, FlashForge's `firmwareExe` execs only `start.sh`, and Moonraker
+  runs with `provider: none`. Printers that already took an earlier release
+  still carry the link and are repaired by the package at
+  [Klipper4FlashForge/stock-recovery](https://github.com/Klipper4FlashForge/stock-recovery).
 
 ## v20260827c-melitopol — 2026-08-27
 

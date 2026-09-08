@@ -385,14 +385,9 @@ if [ -n "$MODTAR" ]; then
         # /run is a tmpfs, so this matters only for a hand-run install over
         # ssh: a live s6-rc state points at the database just replaced.
         rm -rf /run/s6-rc
-        # klipperDaemon is anvil-link-prog.sh's now, below, like the other two
-        # files in $MODDIR/prog. It used to be hand-copied here with the stock
-        # KLIPPER_NICENESS seded into it, which is what made it machine-specific
-        # and therefore unlinkable -- and the guard on that block named
-        # $MODDIR/bin/klipperDaemon, a path it stopped shipping at in 057a3a1,
-        # so it was skipped in silence for several releases and every printer
-        # kept FlashForge's own. There is no such number now: klipper/run starts
-        # klippy at normal priority.
+        # klipperDaemon is not installed, copied or linked anywhere: it is
+        # FlashForge's and stays theirs, which is what makes flashing back to
+        # stock a no-op. anvil-link-prog.sh gives the reason.
         echo "mod payload installed"
         # Point the stock paths at the payload's own copies. This has to be
         # HERE and not earlier: the software component, when a package carries

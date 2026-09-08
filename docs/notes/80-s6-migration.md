@@ -650,12 +650,13 @@ gone from people's hands and from `docs/`.
   stands aside from anything any more. It restarts with `s6-svc -wr -t` rather
   than two s6-rc transitions, because `ff-startup` calls it from inside one and
   `s6-rc` takes an exclusive lock on the live directory.
-* **`klipperDaemon` is replaced with a no-op `start`.** It is FlashForge's
-  script and off-repo callers remain -- stock `start.sh`, the UI's restart
-  path, habits over ssh -- and every one of them would fork a second,
-  unsupervised klippy beside the supervised one. `stop`, `restart` and `status`
-  redirect at the service rather than reimplementing pidfile semantics nothing
-  writes any more.
+* **`klipperDaemon` is FlashForge's and is left alone.** Their package carries
+  no copy of it, so anything the mod writes at that path survives every stock
+  flash and stock's `start.sh` calls it on each boot -- a shim there is a
+  printer that cannot be returned to stock. Nothing on a modded machine calls
+  it: `start.sh` is ours and asks `s6-rc`, `firmwareExe` execs only
+  `start.sh`, and Moonraker runs with `provider: none`.
+
 * **The UI is a supervised longrun.** The plan said it could not be: the UI had
   to hold `firmwareExe`'s foreground for the watchdog. `firmwareExe` holds its
   own foreground on `wait` now, so the foreground is not available to lend and
