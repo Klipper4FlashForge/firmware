@@ -24,7 +24,12 @@ fi
 # /usr/prog, the partition a stock flash overwrites. klippy reaches c_helper.so
 # through _cffi_backend, which is why pkgs/3rdparty/python is glibc, not musl.
 KLIPPY=$MODDIR/klipper/klippy/klippy.py
-PRINTER_CFG=/usr/data/config/printer.cfg
+# The mod's config directory, not FlashForge's /usr/data/config: that one is
+# left frozen at whatever the stock firmware last wrote, so a printer flashed
+# back to stock still has a config graph that resolves. anvil-link-prog.sh
+# seeds this one from it on the first install and links the mod's own configs
+# in; klippy's SAVE_CONFIG writes the printer.cfg here from then on.
+PRINTER_CFG=/usr/data/anvil-data/config/printer.cfg
 PRINTER_LOG=/usr/data/logs/printer.log
 UDS=/tmp/uds
 

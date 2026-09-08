@@ -32,8 +32,10 @@ _src="$PKG_WORK/src/moonraker-timelapse-$TIMELAPSE_VERSION"
 # anvil-moonraker's Depends orders the install.
 pkg_stage "$_src/component/timelapse.py" "moonraker/components/timelapse.py"
 
-# $MODDIR/config is a staging directory: runFirmwareExe.sh copies it into
-# /usr/data/config, where printer.base.cfg's [include timelapse.cfg] resolves.
+# $MODDIR/config is a staging directory: anvil-link-prog.sh symlinks every
+# .cfg in it into /usr/data/anvil-data/config, the mod's own config directory,
+# where printer.base.cfg's [include timelapse.cfg] resolves. A link rather
+# than a copy, so an `apk upgrade` of this package changes what Klipper reads.
 pkg_stage "$_src/klipper_macro/timelapse.cfg" "config/timelapse.cfg"
 
 pkg_ship "moonraker/components/timelapse.py" "config/timelapse.cfg"

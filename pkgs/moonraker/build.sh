@@ -32,9 +32,11 @@ rm -rf "$PKG_WORK/stage$MODDIR/moonraker/tests"
 #
 # It installs to $MODDIR/config, a STAGING directory rather than where
 # Moonraker reads it: installer/runFirmwareExe.sh copies $MODDIR/config/* into
-# /usr/data/config/, and moonraker.conf takes the compare-and-.mod-new branch
-# there, because a printer reached through a tuned trusted_clients block must
-# not lose that access on an update.
+# /usr/data/anvil-data/config/, which is Moonraker's config directory as well
+# as klippy's -- the service runs moonraker with `-d /usr/data/anvil-data`.
+# moonraker.conf is overwritten there on every update and moonraker-custom.conf
+# is created once, because a printer reached through a tuned trusted_clients
+# block must not lose that access on an update.
 pkg_stage "$PKG_DIR/payload/config" "config"
 
 pkg_ship "moonraker" "config"

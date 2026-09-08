@@ -21,7 +21,17 @@ MODDIR=/usr/data/anvil
 # One moonraker, on the DATA partition -- /usr/prog is what a stock flash
 # overwrites.
 MOONRAKER_MAIN=$MODDIR/moonraker/moonraker.py
-MOONRAKER_DATA=/usr/data
+# The mod's data path, not /usr/data itself. Moonraker's config directory is
+# <data path>/config and nothing configures that separately -- file_manager
+# registers the "config" root off the data path -- so the data path is what
+# decides whether the mod writes into FlashForge's /usr/data/config. It must
+# not: that directory is what a printer flashed back to stock boots from, and
+# nothing of ours runs during a stock flash to undo anything left in it.
+#
+# This is the same directory klippy's printer.cfg is in, which is also what
+# Mainsail's config editor lists and what moonraker compares klippy's config
+# file against -- one config directory, one answer everywhere.
+MOONRAKER_DATA=/usr/data/anvil-data
 MOONRAKER_TMP=/usr/data/tmp
 MOONRAKER_CONF=$MOONRAKER_DATA/config/moonraker.conf
 
@@ -31,8 +41,23 @@ MOONRAKER_CONF=$MOONRAKER_DATA/config/moonraker.conf
 # "is it running" guard -- s6-supervise execs this only after the previous
 # copy was reaped.
 rm -rf $MOONRAKER_TMP
-mkdir -p $MOONRAKER_TMP $MOONRAKER_DATA/logs
+mkdir -p $MOONRAKER_TMP $MOONRAKER_DATA /usr/data/logs /usr/data/gcodes
 export TMPDIR=$MOONRAKER_TMP
+
+# ---- the data path ---------------------------------------------------------
+#
+# THE TWO FOLDERS THAT DO NOT MOVE WITH IT. Prints live in /usr/data/gcodes --
+# that is klippy's [virtual_sdcard] path and where the stock application put
+# them -- and every log on this printer is in /usr/data/logs. Moving either
+# would strand what is already there; only the CONFIG had a reason to move.
+#
+# Symlinks and not a mount or a copy, because moonraker resolves them:
+# file_manager.register_directory() calls realpath() on a root that is a link,
+# so Mainsail lists the real directory, and the gcode path it compares against
+# klippy's is the resolved one -- which is how `validate_gcode_path` stays
+# quiet with klippy configured for /usr/data/gcodes.
+[ -e $MOONRAKER_DATA/gcodes ] || ln -s /usr/data/gcodes $MOONRAKER_DATA/gcodes
+[ -e $MOONRAKER_DATA/logs ]   || ln -s /usr/data/logs   $MOONRAKER_DATA/logs
 
 # The prerequisites. A run script cannot decline to run -- s6 respawns it -- so
 # a missing one is reported and the sleep keeps it to one line every 5 seconds.
@@ -67,6 +92,29 @@ for _mr_proc in /proc/[0-9]*; do
     esac
 done
 unset _mr_proc _mr_args
+
+# ---- the database ----------------------------------------------------------
+#
+# It moved with the data path. A printer that ran an older release has one
+# under /usr/data -- job history, Mainsail's own stored settings -- and it is
+# carried across once rather than started empty.
+#
+# HERE, BELOW THE STRAY-KILLER, and not in the installer or a package script:
+# this is the one point where moonraker is provably not running. s6-supervise
+# execs this script only after the previous copy was reaped, and the loop above
+# has just killed an unsupervised leftover. Renaming a live lmdb out from under
+# a running moonraker -- which is what doing this from an `apk upgrade` would
+# mean -- is a corrupt database, not a migration.
+if [ -d /usr/data/database ] && [ ! -e $MOONRAKER_DATA/database ]; then
+    if mv /usr/data/database $MOONRAKER_DATA/database; then
+        echo "moonraker: database moved to $MOONRAKER_DATA/database"
+    fi
+fi
+# Moonraker's own identity for this machine, written beside the database. It is
+# regenerated when missing, so this is worth moving and never worth failing on.
+if [ -f /usr/data/.moonraker.uuid ] && [ ! -e $MOONRAKER_DATA/.moonraker.uuid ]; then
+    mv /usr/data/.moonraker.uuid $MOONRAKER_DATA/.moonraker.uuid 2>/dev/null
+fi
 
 # ---- readiness ------------------------------------------------------------
 #
@@ -115,8 +163,11 @@ MOONRAKER_PORT=`awk '
     done
 ) &
 
-# `-d /usr/data` is moonraker's data path. Not optional: moonraker defaults to
-# ~/printer_data, a home directory that does not exist here.
+# `-d` is moonraker's data path, set above. Not optional: moonraker defaults
+# to ~/printer_data, a home directory that does not exist here. There is no
+# `-c`: the config file follows the data path, which is the point of moving
+# it -- a `-c` alone would move the file moonraker READS while file_manager
+# kept registering FlashForge's directory as the config root.
 #
 # stderr goes wherever the scanner's does ($SVC_S6_LOG), which is where a
 # moonraker that dies before its own logging is configured explains itself.

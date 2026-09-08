@@ -15,6 +15,11 @@ it carries and installs the same way — stick in, power on. Keep a copy
 downloaded before you start; the stock packages are published at
 [ghzserg/FF](https://github.com/ghzserg/FF/releases).
 
+The printer goes back to the `printer.cfg` it had before Reforge: the mod keeps
+its Klipper config in a directory of its own and leaves FlashForge's alone,
+which is what makes the stock flash clean. Nothing you tuned is deleted — it
+waits in `/usr/data/anvil-data/config` for the next time you flash Reforge.
+
 ---
 
 ## The logs
