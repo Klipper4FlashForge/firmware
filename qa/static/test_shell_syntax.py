@@ -52,7 +52,6 @@ pytestmark = pytest.mark.static
 # and says so only in s6's own log.
 SYNTAX_GLOBS = ("bin/*.sh", "pkgs/*/payload/*.sh",
                 "pkgs/*/payload/prog/*.sh", "pkgs/*/payload/prog/firmwareExe",
-                "pkgs/*/payload/prog/klipperDaemon",
                 "pkgs/*/payload/etc/s6-rc/" + "source/*/run",
                 "installer/*.sh",
                 "tools/replica/printer/*.sh",
@@ -87,7 +86,6 @@ SYNTAX_GLOBS = ("bin/*.sh", "pkgs/*/payload/*.sh",
 # wifi-action.sh runs on the printer and no lane checks its dialect.
 ASH_GLOBS = ("pkgs/*/payload/*.sh",
              "pkgs/*/payload/prog/*.sh", "pkgs/*/payload/prog/firmwareExe",
-             "pkgs/*/payload/prog/klipperDaemon",
              "pkgs/*/payload/etc/s6-rc/" + "source/*/run",
              "installer/*.sh", "qa/replica/actions/*.sh")
 

@@ -1,15 +1,15 @@
 """A `[ -f $MODDIR/... ]` guard that can only ever be false.
 
-THE BUG THIS EXISTS FOR. `installer/runFirmwareExe.sh` replaces FlashForge's
-`klipperDaemon` -- whose `start` forks a second, unsupervised klippy beside the
-s6-supervised one -- and it guarded that work with
+THE BUG THIS EXISTS FOR. `installer/runFirmwareExe.sh` used to replace
+FlashForge's `klipperDaemon`, and it guarded that work with
 
     if [ -f $MODDIR/bin/klipperDaemon ] && [ -d /usr/prog/klipper ]; then
 
-The file ships at `$MODDIR/prog/klipperDaemon`. It moved there in 057a3a1 and
-the guard did not, so the test was false on every printer and the whole block
-was skipped IN SILENCE -- no error, no log line, just a stock `klipperDaemon`
-left in place for release after release.
+while the file shipped at `$MODDIR/prog/klipperDaemon` -- it had moved in
+057a3a1 and the guard had not. The test was false on every printer and the
+whole block was skipped IN SILENCE: no error, no log line, for release after
+release. That block is gone; the class of bug it is named for is what this
+file gates.
 
 Nothing could have caught it. `sh -n` parses it, shellcheck likes it, and both
 lanes stay green because the branch simply never runs. `test_no_undefined_names`

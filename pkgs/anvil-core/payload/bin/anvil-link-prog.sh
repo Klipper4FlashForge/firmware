@@ -4,7 +4,7 @@
 # Everything the mod installs lives in $MODDIR. What the printer READS is
 # elsewhere, at absolute paths FlashForge's scripts and Klipper's config
 # choose and we do not: app_startup.sh runs
-# /usr/prog/PROGRAM/software/firmwareExe, and klipperDaemon is started from
+# /usr/prog/PROGRAM/software/firmwareExe, which starts
 # /usr/prog/klipper/start.sh. This is the seam -- one symlink per file, so
 # $MODDIR stays the only place anything is installed and `apk upgrade` is
 # enough to change what the printer runs.
@@ -96,10 +96,25 @@ link_one() {
 
 link_one prog/firmwareExe   /usr/prog/PROGRAM/software/firmwareExe
 link_one prog/start.sh      /usr/prog/klipper/start.sh
-# Stock's `start` forks a second, unsupervised klippy beside the s6 one, so
-# this shim has to win. Whether the stock file is there at all does not matter:
-# link_one replaces whatever it finds, and this runs after the payload landed.
-link_one prog/klipperDaemon /usr/prog/klipper/klipperDaemon
+
+# KLIPPERDAEMON IS FLASHFORGE'S AND IS LEFT ALONE, which is what keeps a stock
+# flash a no-op. Their package restores the two paths above -- run.sh copies
+# its own firmwareExe and start.sh over them, and busybox `cp -f` unlinks a
+# symlink rather than writing through it -- but it carries no klipperDaemon at
+# all: not in the software component, not in its md5sum.list, no line in
+# run.sh. Anything the mod puts at that path is therefore permanent, and
+# stock's start.sh, whose last line is
+#
+#     /usr/prog/klipper/klipperDaemon start
+#
+# runs whatever it finds there for the life of the machine.
+#
+# Nothing here needs it. start.sh above is ours and asks s6-rc; FlashForge's
+# firmwareExe execs /usr/prog/klipper/start.sh and names no other script;
+# Moonraker runs with `provider: none`, so a restart from Mainsail goes over
+# the API. The one caller left is a person at an ssh prompt, who gets
+# FlashForge's script and an unsupervised klippy beside the supervised one --
+# `s6-rc -u change klipper` and `s6-svc` are what to use instead.
 
 # ---- the live config directory ---------------------------------------------
 #
