@@ -13,8 +13,7 @@
 #
 # NO CACHE OF ITS OWN. bin/payload.sh kept a $FORK/.version stamp and an
 # `is the .so older than any .c` mtime test, both of which pkg_begin's stamp
-# replaces -- the stamp is the pinned commit and the toolchain filename, so a
-# bump to either rebuilds and nothing else does.
+# replaces -- the shared stamp tracks the pin, toolchain and recipe inputs.
 set -euo pipefail
 . ./bin/common.sh
 . pkgs/lib.sh

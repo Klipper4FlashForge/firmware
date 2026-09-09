@@ -29,26 +29,27 @@ pkg_die()  { printf '   !! %s\n' "$*" >&2; exit 1; }
 #                      is what the printer's apk reads. Keeping them apart
 #                      stops a runtime
 #                      dependency on a merely-linked library.
-#   PKG_STAMP_EXTRA    content hash for inputs no version number describes.
+#   PKG_STAMP_EXTRA    external inputs and settings not in the recipe tree.
 #   PKG_DEV_FILES      files that move into a separate <name>-dev package.
 #   PKG_WHEN           whether the recipe exists at all; empty means always.
 #                      A false condition is absence, not failure.
 
-# PKG_STAMP_EXTRA="$(pkg_payload_hash)" -- sixteen hex digits over payload/
-# and control/, for the half of a package that comes out of this checkout
-# rather than a tarball; without it the stamp reports "already current" and
-# hands back the previous build. control/ counts, because an edited postinst
-# changes what the package does; seed/ ships in nothing. $PKG_DIR is already
-# set.
-#
-# TWO find CALLS AND AN `|| true`: `find a b` with b missing exits non-zero,
-# which under the recipes' `set -euo pipefail` kills the build silently.
-pkg_payload_hash() {
-    {   find "$PKG_DIR/payload" -type f -print0 2>/dev/null || true
-        find "$PKG_DIR/control" -type f -print0 2>/dev/null || true
-    }   | LC_ALL=C sort -z | xargs -0 sha256sum 2>/dev/null \
+# Hash every recipe's local inputs automatically: build.sh, pkg.conf, patches,
+# payload and control files, plus the shared build implementation. Relative
+# paths and normalized archive metadata keep a moved or freshly checked-out
+# tree cacheable; modes and symlink targets matter because pkg_stage uses cp -a.
+# seed/ belongs to the installer, and pkg_ship discards Python bytecode.
+# GNU tar is part of the build image; no compiler or fetched source is needed.
+pkg_recipe_hash() (
+    set -o pipefail
+    cd "$ROOT" || exit 1
+    _recipe=${PKG_DIR#"$ROOT"/}
+    LC_ALL=C tar --sort=name --format=gnu --mtime=@0 \
+        --owner=0 --group=0 --numeric-owner \
+        --exclude="$_recipe/seed" --exclude='__pycache__' --exclude='*.pyc' \
+        -cf - "$_recipe" pkgs/lib.sh bin/common.sh \
         | sha256sum | cut -c1-16
-}
+)
 
 # pkg_release_stamp -> the packaging revision for a recipe whose VERSION is an
 # upstream pin but whose contents are partly this repo's.
@@ -75,7 +76,7 @@ pkg_release_stamp() {
 # pkg_signkey_hash -> a cache key for the feed's public key, or `unsigned`.
 #
 # anvil-core ships that key, and it lives OUTSIDE the repo, so
-# pkg_payload_hash cannot see it: without this, changing the signing key
+# pkg_recipe_hash cannot see it: without this, changing the signing key
 # leaves a warm cache and ships a package that still trusts the old one.
 #
 # THE MISSING-KEY CASE IS THE WHOLE REASON THIS IS A FUNCTION. Spelled inline
@@ -208,10 +209,11 @@ pkg_name_map() {
     done
 }
 
-# The cache key for a recipe: its version, the toolchain that determines its
-# ABI, and recursively the stamp of all it builds against, so a zlib bump
-# rebuilds everything built against it. From pkg.conf alone, so fetch-assets.sh
-# can ask whether a build needs a compiler before one exists.
+# The cache key includes local recipe and shared build inputs for every
+# package, plus its version, toolchain and external inputs. Dependency stamps
+# propagate source and recipe changes to everything built against them.
+# Only checkout files and metadata are needed, so fetch-assets.sh can ask
+# whether a build needs a compiler before one exists.
 pkg_stamp() {
     (
         _PKG_DEPTH=$(( ${_PKG_DEPTH:-0} + 1 ))
@@ -219,12 +221,14 @@ pkg_stamp() {
         [ "$_PKG_DEPTH" -le 16 ] \
             || pkg_die "pkg_stamp: dependency cycle reached '$1'"
         pkg_conf "$1"
-        _s="$1 $PKG_VERSION-$PKG_RELEASE $MIPS_TOOLCHAIN_FILE"
+        _inputs=$(pkg_recipe_hash) || exit 1
+        _s="$1 $PKG_VERSION-$PKG_RELEASE $MIPS_TOOLCHAIN_FILE $_inputs"
         # Before the dependency stamps, so the string still reads
         # outermost-first when two are compared by eye.
         [ -z "$PKG_STAMP_EXTRA" ] || _s="$_s $PKG_STAMP_EXTRA"
         for _d in $PKG_BUILD_DEPENDS; do
-            _s="$_s [$(pkg_stamp "$_d")]"
+            _dep_stamp=$(pkg_stamp "$_d") || exit 1
+            _s="$_s [$_dep_stamp]"
         done
         printf '%s' "$_s"
     )
@@ -232,7 +236,8 @@ pkg_stamp() {
 
 # True when a recipe's output tree is missing or was built from other inputs.
 pkg_stale() {
-    [ "$(cat "$(pkg_out "$1")/.version" 2>/dev/null || true)" != "$(pkg_stamp "$1")" ]
+    _current_stamp=$(pkg_stamp "$1") || pkg_die "cannot stamp '$1'"
+    [ "$(cat "$(pkg_out "$1")/.version" 2>/dev/null || true)" != "$_current_stamp" ]
 }
 
 # Every recipe under pkg/, one per line. pkg.conf is what makes a directory a
@@ -291,7 +296,7 @@ pkg_begin() {
     PKG_ID=$1
     pkg_conf "$PKG_ID"
     PKG_OUT=$PKG_ROOT
-    PKG_STAMP=$(pkg_stamp "$PKG_ID")
+    PKG_STAMP=$(pkg_stamp "$PKG_ID") || pkg_die "cannot stamp '$PKG_ID'"
     PKG_WORK="work/.pkg-$PKG_ID"
 
     if [ "$(cat "$PKG_OUT/.version" 2>/dev/null || true)" = "$PKG_STAMP" ]; then
