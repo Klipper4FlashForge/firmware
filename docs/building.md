@@ -413,16 +413,6 @@ pkgs/           package recipes: one directory per component, each a
                   database to $MODDIR while files still extract at /.
 ```
 
-Package build stamps automatically include each recipe's files (`build.sh`,
-`pkg.conf`, patches, payloads and package hooks), plus `pkgs/lib.sh` and
-`bin/common.sh`. File modes and symlink targets count; timestamps and checkout
-location do not. Installer `seed/` files and generated Python bytecode are
-excluded. Changes to a build dependency also invalidate its dependents.
-`PKG_STAMP_EXTRA` is reserved for external inputs and settings, such as the
-feed's public signing key and URL. Changing the stamp format or shared build
-scripts rebuilds all package outputs on their next build; it does not change
-the package versions used by printers to decide whether to upgrade.
-
 **Tests it** — never ships, and never touched by a build:
 
 ```

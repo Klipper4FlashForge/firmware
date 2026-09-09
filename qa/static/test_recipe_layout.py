@@ -139,9 +139,9 @@ def test_a_pinned_recipe_that_ships_our_files_versions_on_the_release():
     the package changes, because `payload/` is ours. apk compares the version
     and nothing else: same string, no upgrade, whatever the bytes say.
 
-    `pkg_stamp` does not help here and reads as though it should. It hashes
-    the recipe files so the BUILD rebuilds the package; it says nothing to a
-    printer.
+    `PKG_STAMP_EXTRA="$(pkg_payload_hash)"` does not help here and reads as
+    though it should. It hashes `payload/` so the BUILD rebuilds the package;
+    it says nothing to a printer.
 
     So a pinned recipe with a `payload/` directory takes its revision from
     `pkg_release_stamp` -- the release date, monotone, and nobody's to
