@@ -49,6 +49,12 @@ pkg_build "$_top"
 # error. See docs/notes/20-klipper-fork.md.
 pkg_stage "$PKG_WORK/src/$_top/klippy" "klipper/klippy"
 
+# Moonraker registers these beside klippy as config_examples and docs when
+# Klipper connects. Ship the matching examples and documentation so both
+# file roots exist and contain the reference files for this fork.
+pkg_stage "$PKG_WORK/src/$_top/config" "klipper/config"
+pkg_stage "$PKG_WORK/src/$_top/docs" "klipper/docs"
+
 # The toolchanger extras, ON TOP of the fork's own -- the order stock run.sh
 # used, kept because klippy has no search path: it resolves an extra as
 # dirname(klippy.py)/extras/<name>.py and nothing else. Being inside the tree
