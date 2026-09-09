@@ -54,6 +54,9 @@ pkg_stage "$PKG_WORK/src/$_top/klippy" "klipper/klippy"
 # file roots exist and contain the reference files for this fork.
 pkg_stage "$PKG_WORK/src/$_top/config" "klipper/config"
 pkg_stage "$PKG_WORK/src/$_top/docs" "klipper/docs"
+# _klipper3d builds the upstream website and requires host tools, including
+# Bash. It is not reference documentation for the printer.
+rm -rf "$PKG_WORK/stage$MODDIR/klipper/docs/_klipper3d"
 
 # The toolchanger extras, ON TOP of the fork's own -- the order stock run.sh
 # used, kept because klippy has no search path: it resolves an extra as
