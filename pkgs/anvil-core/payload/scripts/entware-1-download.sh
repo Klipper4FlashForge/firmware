@@ -1,6 +1,6 @@
 #!/bin/sh
 # si rilancia in background, così non blocca run-scripts
-[ "$1" = bg ] || { "$0" bg >/dev/null 2>&1 & exit 0; }
+[ "$1" = bg ] || { "$0" bg >>/usr/data/logs/entware.log 2>&1 & exit 0; }
 
 OPT_DIR=/usr/data/anvil/entware/opt
 URL=http://bin.entware.net/mipselsf-k3.4/installer/generic.sh
