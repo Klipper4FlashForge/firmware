@@ -10,6 +10,9 @@ i=0
 while [ ! -x /opt/bin/opkg ] && [ $i -lt 40 ]; do
     i=$((i+1)); sleep 3
 done
+
+sleep 5
+
 [ -x /opt/bin/opkg ] || { echo "samba: entware non attivo"; exit 1; }
 
 # installa samba solo se manca
