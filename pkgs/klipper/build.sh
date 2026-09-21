@@ -85,7 +85,9 @@ pkg_stage "$PKG_DIR/payload/prog/stock-chelper" "prog/stock-chelper"
 # written twice, here and in pkgs/moonraker, and the recipe that needed it
 # most did not have it: anvil-core stages a directory of .py helpers and was
 # shipping bytecode whenever a test had imported one of them.
-pkg_ship "klipper" "prog/stock-chelper"
+# Binario MIPS di playsound.sh: sta qui perché anvil-core è Architecture: all.
+pkg_stage "$PKG_DIR/payload/play/play" "play/play"
+pkg_ship "klipper" "prog/stock-chelper" "play/play"
 
 # --------------------------------------------------------------- no gate here
 # This recipe checks nothing about the object it just built, and both halves of
