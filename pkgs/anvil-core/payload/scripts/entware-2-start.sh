@@ -1,7 +1,15 @@
 #!/bin/sh
-OPT_DIR=/usr/data/anvil/entware/opt
+OLD_DIR=/usr/data/bin/opt
+NEW_DIR=/usr/data/anvil/entware/opt
 
-[ -x "$OPT_DIR/bin/opkg" ] || exit 0
+# sceglie dove sta Entware: prima il vecchio, poi il nuovo
+if [ -x "$OLD_DIR/bin/opkg" ]; then
+    OPT_DIR=$OLD_DIR
+elif [ -x "$NEW_DIR/bin/opkg" ]; then
+    OPT_DIR=$NEW_DIR
+else
+    exit 0
+fi
 
 mkdir -p /opt
 grep -q ' /opt ' /proc/mounts || mount --bind "$OPT_DIR" /opt

@@ -2,10 +2,12 @@
 # si rilancia in background, così non blocca run-scripts
 [ "$1" = bg ] || { "$0" bg >>/usr/data/logs/entware.log 2>&1 & exit 0; }
 
+OLD_DIR=/usr/data/bin/opt
 OPT_DIR=/usr/data/anvil/entware/opt
 URL=http://bin.entware.net/mipselsf-k3.4/installer/generic.sh
 
-# già installato, niente da fare (ci pensa lo script 2)
+# già installato (vecchio o nuovo path): niente da fare, ci pensa lo script 2
+[ -x "$OLD_DIR/bin/opkg" ] && exit 0
 [ -x "$OPT_DIR/bin/opkg" ] && exit 0
 
 # aspetta internet: max 120s, ogni 3s
