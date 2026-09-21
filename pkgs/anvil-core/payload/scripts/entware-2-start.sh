@@ -1,7 +1,6 @@
 #!/bin/sh
 OLD_DIR=/usr/data/bin/opt
 NEW_DIR=/usr/data/anvil/entware/opt
-
 sleep 3
 # sceglie dove sta Entware: prima il vecchio, poi il nuovo
 if [ -x "$OLD_DIR/bin/opkg" ]; then
