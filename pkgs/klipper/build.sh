@@ -72,6 +72,8 @@ rm -rf "$PKG_WORK/stage$MODDIR/klipper/docs/_klipper3d"
 for _e in "$PKG_DIR"/payload/klipper/klippy/extras/ff_*.py; do
     pkg_stage "$_e" "klipper/klippy/extras/$(basename "$_e")"
 done
+pkg_stage "$PKG_DIR/payload/klipper/klippy/extras/helix_sync.py" "klipper/klippy/extras/helix_sync.py"
+
 
 # FLASHFORGE'S OWN chelper, at $MODDIR/prog/stock-chelper and never on klippy's
 # path. anvil-link-prog.sh puts it back over /usr/prog/klipper/klippy/chelper
