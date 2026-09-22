@@ -73,7 +73,7 @@ for _e in "$PKG_DIR"/payload/klipper/klippy/extras/ff_*.py; do
     pkg_stage "$_e" "klipper/klippy/extras/$(basename "$_e")"
 done
 pkg_stage "$PKG_DIR/payload/klipper/klippy/extras/helix_sync.py" "klipper/klippy/extras/helix_sync.py"
-
+pkg_stage "$PKG_DIR/payload/klipper/klippy/extras/gcode_shell_command.py" "klipper/klippy/extras/gcode_shell_command.py"
 
 # FLASHFORGE'S OWN chelper, at $MODDIR/prog/stock-chelper and never on klippy's
 # path. anvil-link-prog.sh puts it back over /usr/prog/klipper/klippy/chelper
