@@ -43,6 +43,7 @@ export MODDIR PY_HOST PY_TOOLCHAIN_DIR IPK_ARCH
 # shellcheck disable=SC1091
 [ -f "$ROOT/versions.env" ] && . "$ROOT/versions.env"
 MAINSAIL_ZIP="${MAINSAIL_ZIP:-$ROOT/vendor/mainsail-${MAINSAIL_VERSION:-unpinned}.zip}"
+FLUIDD_ZIP="${FLUIDD_ZIP:-$ROOT/vendor/fluidd-${FLUIDD_VERSION:-unpinned}.zip}"
 HELIX_TGZ="${HELIX_TGZ:-$ROOT/vendor/${HELIX_FILE:-helixscreen.tar.gz}}"
 MOONRAKER_TGZ="${MOONRAKER_TGZ:-$ROOT/vendor/moonraker-${MOONRAKER_VERSION:-unpinned}.tar.gz}"
 TIMELAPSE_TGZ="${TIMELAPSE_TGZ:-$ROOT/vendor/moonraker-timelapse-${TIMELAPSE_VERSION:-unpinned}.tar.gz}"
