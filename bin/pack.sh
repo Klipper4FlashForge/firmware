@@ -71,13 +71,13 @@ fi
 OUT_MACHINE="${PKG_MACHINE:-${TARGET_MACHINE:-Creator5Pro}}"
 OUT_PID="${PKG_PID:-${TARGET_PID:-0029}}"
 
-# The payload rides here so it lands on /usr/data, not the firmware partition.
 if [ -d "$PAYLOAD_DIR" ]; then
     # This one IS really xz: we extract it ourselves with `xz -dc`.
-    echo ">> compressing anvil.tar.xz (Mainsail / HelixScreen / Moonraker / bin)"
+    echo ">> compressing anvil.tar.xz (Mainsail / Fluidd / HelixScreen / Moonraker / bin)"
     tar -cf - -C "$PAYLOAD_DIR" . | xz -T0 -6 > work/stage/anvil.tar.xz
-    ls -lh work/stage/anvil.tar.xz | awk '{print "   "$5}'
+    ls -lh work/stage/anvil.tar.xz | awk '{print "    "$5}'
 fi
+
 
 # OUR installer, not FlashForge's. app_startup.sh runs whatever it finds under
 # this name, so owning the name is all it takes to own the install -- see the
