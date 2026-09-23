@@ -1584,6 +1584,12 @@ class FFToolchange:
         if current < 0:
             gcmd.respond_info("no tool mounted (%s)" % reason)
             return
+        # Keep UI status at "changing" for the whole release.  While the
+        # tool seats, the dock switch can become active shortly before the
+        # carriage grab switch clears.  That is a normal transient, but the
+        # sensor-derived status is deliberately strict and would otherwise
+        # expose it as "error" to HelixScreen.
+        self.changing = True
         try:
             self._ensure_homed('xy')
             self._release(current)
@@ -1591,6 +1597,8 @@ class FFToolchange:
                 self._restore_position(restore_axis, resume)
         except FFToolchangeError as err:
             raise gcmd.error(str(err))
+        finally:
+            self.changing = False
 
     def print_offset_ready(self, tool=None):
         """Can TOOLCHANGE_SET_PRINT_OFFSET succeed? Needs station_z and
