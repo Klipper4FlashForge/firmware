@@ -141,6 +141,11 @@ if [ "$ALL" = 1 ] || [ "${BUILD_MAINSAIL:-0}" = "1" ]; then
         "$MAINSAIL_ZIP" "$MAINSAIL_SHA256"
 fi
 
+if [ "$ALL" = 1 ] || [ "${BUILD_FLUIDD:-0}" = "1" ]; then
+    get "https://github.com/fluidd-core/fluidd/releases/download/$FLUIDD_VERSION/fluidd.zip" \
+        "$FLUIDD_ZIP" "$FLUIDD_SHA256"
+fi
+
 if [ "$ALL" = 1 ] || [ "${BUILD_HELIX:-0}" = "1" ]; then
     # Klipper4FlashForge is the org's current name; the old URL only worked
     # through GitHub's rename redirect.

@@ -72,6 +72,8 @@ rm -rf "$PKG_WORK/stage$MODDIR/klipper/docs/_klipper3d"
 for _e in "$PKG_DIR"/payload/klipper/klippy/extras/ff_*.py; do
     pkg_stage "$_e" "klipper/klippy/extras/$(basename "$_e")"
 done
+pkg_stage "$PKG_DIR/payload/klipper/klippy/extras/helix_sync.py" "klipper/klippy/extras/helix_sync.py"
+pkg_stage "$PKG_DIR/payload/klipper/klippy/extras/gcode_shell_command.py" "klipper/klippy/extras/gcode_shell_command.py"
 
 # FLASHFORGE'S OWN chelper, at $MODDIR/prog/stock-chelper and never on klippy's
 # path. anvil-link-prog.sh puts it back over /usr/prog/klipper/klippy/chelper
@@ -85,7 +87,9 @@ pkg_stage "$PKG_DIR/payload/prog/stock-chelper" "prog/stock-chelper"
 # written twice, here and in pkgs/moonraker, and the recipe that needed it
 # most did not have it: anvil-core stages a directory of .py helpers and was
 # shipping bytecode whenever a test had imported one of them.
-pkg_ship "klipper" "prog/stock-chelper"
+# Binario MIPS di playsound.sh: sta qui perché anvil-core è Architecture: all.
+pkg_stage "$PKG_DIR/payload/play/play" "play/play"
+pkg_ship "klipper" "prog/stock-chelper" "play/play"
 
 # --------------------------------------------------------------- no gate here
 # This recipe checks nothing about the object it just built, and both halves of
