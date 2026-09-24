@@ -115,9 +115,10 @@ BOARDS = {
     'levelboard': 'THE LEVEL BOARD',
 }
 
-TITLE = 'SETTING UP YOUR PRINTER'
+TITLE = 'REFORGE IS STARTING'
+PLEASE_WAIT = 'PLEASE WAIT'
 KEEP_POWER = 'DO NOT TURN THE PRINTER OFF'
-RETRY = 'SETUP WILL RETRY ON NEXT START'
+RETRY = 'STARTUP WILL RETRY ON NEXT BOOT'
 LOGFILE = '/USR/DATA/LOGS/ANVIL-BOOT.LOG'
 
 
@@ -153,11 +154,11 @@ class Panel:
             self.screen = screen
 
     # Both of these swallow everything. This is the boundary where drawing
-    # stops being allowed to matter: the migration must run identically with
+    # stops being allowed to matter: startup must run identically with
     # no panel, a panel that dies mid-write, or one that throws something
     # unanticipated. One failure retires the screen for the rest of the run.
 
-    def say(self, status, progress, note=KEEP_POWER, detail='', fault=False):
+    def say(self, status, progress, note=PLEASE_WAIT, detail='', fault=False):
         if self.screen is None:
             return
         try:
@@ -169,7 +170,7 @@ class Panel:
     def failed(self, reason):
         """The one frame a person is actually left looking at.
 
-        "Setup will retry" on its own tells them nothing they can act on, so
+        "Startup will retry" on its own tells them nothing they can act on, so
         the reason goes underneath -- and the log line goes under that,
         because the reason has to be short and the log never is."""
         log('giving up: %s' % reason)
@@ -276,7 +277,7 @@ def board_name(key):
     return BOARDS.get(key, str(key).upper())
 
 
-def hand_over_boards(panel, timeout):
+def hand_over_boards(panel, timeout, progress_base=0.12):
     """Bring the toolhead boards out of their bootloaders.
 
     Called directly rather than run as a subprocess: this program owns when
@@ -290,8 +291,8 @@ def hand_over_boards(panel, timeout):
         if not devices:
             return
         names = [board_name(device) for device in devices]
-        panel.say('WAKING ' + ' AND '.join(names[:2]), 0.08)
-    panel.say('WAKING THE TOOLHEAD BOARDS', 0.05)
+        panel.say('WAKING ' + ' AND '.join(names[:2]), progress_base + 0.06)
+    panel.say('WAKING THE TOOLHEAD BOARDS', progress_base)
     try:
         all_awake = bringup.bringup(list(bringup.DEFAULT_PORTS), timeout,
                                     on_progress=progress)
@@ -395,11 +396,21 @@ def wait_for_stack(moonraker, panel, deadline, started, quiet=False):
             log('waiting: moonraker=%s klipper=%s'
                 % ('up' if state is not None else 'down', state or 'unknown'))
             last_state = state
-        elapsed_fraction = 0.3 * (time.time() - started) / window
+        # The bar represents the whole normal boot. This wait owns its middle
+        # forty percent; calibration, when needed, uses the final stages.
+        elapsed_fraction = 0.4 * (time.time() - started) / window
         if state is None:
-            panel.say('STARTING SERVICES', 0.05 + elapsed_fraction)
+            panel.say('STARTING MOONRAKER', 0.35 + elapsed_fraction,
+                      detail='WAITING FOR THE PRINTER API')
         elif state != 'ready':
-            panel.say('WAITING FOR THE PRINTER', 0.05 + elapsed_fraction)
+            if state == 'startup':
+                detail = 'CONNECTING KLIPPER TO THE PRINTER BOARDS'
+            elif state == 'error':
+                detail = 'A BOARD DID NOT ANSWER; PREPARING A RETRY'
+            else:
+                detail = 'KLIPPER STATE: %s' % str(state).upper()
+            panel.say('STARTING KLIPPER', 0.35 + elapsed_fraction,
+                      detail=detail)
         if state == 'ready':
             return True
         if state == 'error' and quiet:
@@ -463,7 +474,7 @@ def run(args):
         hand_over_boards(panel, args.mcu_timeout)
         return 0
     moonraker = Moonraker(args.moonraker)
-    panel.say('STARTING SERVICES', 0.05)
+    panel.say('STARTING SERVICES', 0.30)
     try:
         return startup(args, moonraker, panel, started, deadline)
     finally:
@@ -485,19 +496,22 @@ def bring_up_printer(args, moonraker, panel, started, deadline):
         # that is not there at all because its run script is failing.
         if attempt > 1 or not klippy_running():
             if attempt > 1 or not args.no_bringup:
-                hand_over_boards(panel, min(args.mcu_timeout,
-                                            max(1.0, deadline - time.time())))
+                hand_over_boards(
+                    panel,
+                    min(args.mcu_timeout, max(1.0, deadline - time.time())),
+                    progress_base=0.68 if attempt > 1 else 0.12)
             if not args.no_klipper and not restart_klipper(args):
                 panel.failed('KLIPPER COULD NOT BE STARTED')
                 return False
         if wait_for_stack(moonraker, panel, deadline, started, quiet=True):
+            panel.say('KLIPPER IS READY', 0.78)
             return True
         if time.time() >= deadline or attempt == args.klipper_tries:
             break
         board = klippy_fault(moonraker)
         log('attempt %d/%d failed (%s) -- restarting klipper'
             % (attempt, args.klipper_tries, board or 'no board named'))
-        panel.say('RETRYING %s' % (board or 'THE PRINTER'), 0.15,
+        panel.say('RETRYING %s' % (board or 'THE PRINTER'), 0.68,
                   detail='ATTEMPT %d OF %d' % (attempt + 1,
                                                args.klipper_tries))
     report_stack_failure(moonraker, panel)
@@ -511,14 +525,17 @@ def startup(args, moonraker, panel, started, deadline):
 
     # -- first boot only -------------------------------------------------
     if args.no_import:
+        panel.say('STARTUP COMPLETE', 1.0, note='')
         return 0
     if os.path.exists(args.stamp):
         log('already migrated (%s) -- nothing else to do' % args.stamp)
+        panel.say('STARTUP COMPLETE', 1.0, note='')
         return 0
     extruder_json = os.path.join(args.dir, 'extruder.json')
     if not os.path.exists(extruder_json):
         # Not a unit migrated from stock firmware (or the files were wiped).
         log('no %s -- nothing to import' % extruder_json)
+        panel.say('STARTUP COMPLETE', 1.0, note='')
         return 0
     log('first boot: importing this unit\'s factory calibration from %s'
         % args.dir)
@@ -536,7 +553,7 @@ def migrate(args, moonraker, panel):
         # Someone got there first: a hand calibration, or a restored config.
         # Importing over it would throw away the better numbers.
         log('a tool already carries a nozzle position -- nothing to import')
-        panel.say('ALREADY CALIBRATED', 1.0, note='')
+        panel.say('STARTUP COMPLETE', 1.0, note='')
         stamp(args.stamp, 'already calibrated; nothing imported')
         return 0
 
@@ -556,7 +573,7 @@ def migrate(args, moonraker, panel):
         log('dry run: would run FF_IMPORT_FIRMWARE_CONFIG and SAVE_CONFIG')
         return 0
 
-    panel.say('READING FACTORY CALIBRATION', 0.5)
+    panel.say('READING FACTORY CALIBRATION', 0.82, note=KEEP_POWER)
     applied, detail = moonraker.gcode('FF_IMPORT_FIRMWARE_CONFIG')
     if not applied:
         log('FF_IMPORT_FIRMWARE_CONFIG failed: %s' % detail)
@@ -571,13 +588,13 @@ def migrate(args, moonraker, panel):
         return 1
 
     log('imported; persisting with SAVE_CONFIG -- klipper restarts once')
-    panel.say('SAVING CALIBRATION', 0.7)
+    panel.say('SAVING CALIBRATION', 0.88, note=KEEP_POWER)
     applied, detail = moonraker.gcode('SAVE_CONFIG', timeout=20.0)
     if not applied:
         # Expected: the restart cuts the connection before moonraker answers.
         log('SAVE_CONFIG did not answer (%s) -- klipper is restarting' % detail)
 
-    panel.say('RESTARTING THE PRINTER', 0.85)
+    panel.say('RESTARTING KLIPPER', 0.94, note=KEEP_POWER)
     if not wait_for_ready(moonraker, max(deadline, time.time() + 90.0)):
         log('klipper did not come back after SAVE_CONFIG -- no stamp')
         panel.failed('KLIPPER DID NOT RESTART AFTER SAVING')
@@ -590,7 +607,7 @@ def migrate(args, moonraker, panel):
         return 1
 
     log('done: the factory calibration is saved in printer.cfg')
-    panel.say('SETUP COMPLETE', 1.0, note='')
+    panel.say('STARTUP COMPLETE', 1.0, note='')
     stamp(args.stamp, 'imported %s' % args.dir)
     return 0
 

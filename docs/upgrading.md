@@ -11,8 +11,9 @@ that line is what makes an update safe.
 
 | File | Whose |
 |---|---|
-| `/usr/data/anvil-data/config/printer.cfg` | **Yours** — never overwritten. Overrides go here, after the includes: restate only what you change, the last value wins. |
+| `/usr/data/anvil-data/config/printer.cfg` | **Yours** — preserved across updates. The installer removes FlashForge's obsolete `[output_pin DC24V_CTL]` once; overrides otherwise stay here after the includes. |
 | `/usr/data/anvil-data/config/moonraker-custom.conf` | **Yours** — created once, never rewritten, included last so your settings win. Do not delete it. |
+| `/usr/data/anvil-data/scripts/*.sh` | **Yours** — custom boot scripts, preserved across updates. |
 | `ff-*.cfg`, `printer.base.cfg`, `moonraker.conf` | **The mod's** — overwritten on every update; do not edit. |
 | `anvil/helixscreen/config/settings.json` | **Yours** — everything you set on the screen. Written by HelixScreen itself; carried across updates along with `helixscreen.env` and its spool map. |
 
@@ -38,6 +39,10 @@ Your `printer.cfg` with its saved calibration, `moonraker-custom.conf`, **your
 root password** and everything you set on the screen survive; the `ff-*.cfg`
 family is replaced. If a release changes `helixscreen.env`, yours is kept and
 the new one is left beside it as `helixscreen.env.mod-new`.
+
+Custom boot scripts under `/usr/data/anvil-data/scripts` survive too. The
+payload itself lives under `/usr/data/anvil` and is replaced as a unit, so do
+not put user files there. See [Custom boot scripts](custom-scripts.md).
 
 ---
 

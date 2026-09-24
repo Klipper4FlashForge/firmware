@@ -90,6 +90,7 @@ nav:
   - For experienced users:
       - How a print runs: how-a-print-runs.md
       - How calibration works: how-calibration-works.md
+      - Custom boot scripts: custom-scripts.md
 
   # Not yet redesigned -- these are the pages as they stand, regrouped.
   - For contributors:

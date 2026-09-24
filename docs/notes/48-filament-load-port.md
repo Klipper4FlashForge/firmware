@@ -36,6 +36,7 @@ Port: `pkgs/klipper-config/payload/config/ff-filament.cfg` — `LOAD_FILAMENT`, 
 | temp | table by filament.json type, +30 | `TEMP=` (HelixScreen pre-fills) or `MATERIAL=PLA` → same table; `BOOST=30` |
 | wait | 1 s poll ±3 | `TEMPERATURE_WAIT MIN/MAX ±3` |
 | tool | grab, release at end | `SELECT_TOOL`, `UNSELECT_TOOL` (`RELEASE=0` keeps it) |
+| idle load | E150 then E145 | E80 then E50 by default, followed by E−5; `LENGTH=` and `RETRACT=` override |
 | paused print | LoadFilamentPrint path | mounted tool only (else refuse), E100/E−5, no Z, tool and heater left for RESUME |
 | printing | UI disabled | refuse |
 | unload | same as load | **designed**: E+10 prime, E−20 F1200, remainder of `unload_length` (80) F600 |

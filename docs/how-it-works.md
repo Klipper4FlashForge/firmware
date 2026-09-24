@@ -57,10 +57,11 @@ klipper      longrun   klippy            (depends on mcu-bringup)
 wifi         longrun   wpa_supplicant on wlan0
 wifi-dhcp    longrun   udhcpc, on wpa_supplicant's association
                        events                      (depends on wifi)
-nginx        longrun   nginx (Mainsail) on :80
+nginx        longrun   nginx (Mainsail on :80 and Fluidd on :81)
 moonraker    longrun   moonraker on :7125
 camera       longrun   mjpg-streamer on :8080 (nginx proxies it at /webcam/)
 ntp          longrun   sntpd, the clock (there is no RTC and no battery)
+run-scripts  oneshot   user *.sh files, with a 30-second boot deadline
 ff-startup   oneshot   waits until the printer is usable
                        (depends on klipper, moonraker)
 ui           longrun   HelixScreen       (depends on ff-startup)

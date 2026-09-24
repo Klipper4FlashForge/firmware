@@ -18,6 +18,7 @@ Everything is on the printer's own address:
 | | |
 |---|---|
 | `http://<printer-ip>/` | Mainsail |
+| `http://<printer-ip>:81/` | Fluidd |
 | `http://<printer-ip>:7125` | Moonraker's API — what slicers upload to |
 | `http://<printer-ip>/webcam/` | the camera stream (mjpg-streamer on `:8080`) |
 | `ssh root@<printer-ip>` | the shell — password from `anvil-password.txt` |
@@ -27,6 +28,7 @@ Everything is on the printer's own address:
 /usr/data/logs/anvil-boot.log    services + UI choice at each boot
 /usr/data/logs/printer.log       klipper
 /usr/data/logs/helixscreen.log   helixscreen
+/usr/data/logs/custom-scripts.log custom boot scripts, when configured
 ```
 
 They are the first thing to read when something is wrong, and the first thing

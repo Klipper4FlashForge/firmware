@@ -261,6 +261,21 @@ def test_the_shipped_config_parses(model):
 
 
 @pytest.mark.parametrize("model", MODELS)
+def test_dc24v_rail_follows_every_hotend(model):
+    cp = _parse(model)
+    section = "heater_fan dc24v_ctl"
+    assert cp.has_section(section), "%s has no [%s]" % (model, section)
+    assert cp.get(section, "pin").strip() == "eheaterboard:PA3"
+    assert cp.get(section, "heater").replace(" ", "") == \
+        "extruder,extruder1,extruder2,extruder3"
+    assert cp.getfloat(section, "heater_temp") == 50.0
+    assert cp.getfloat(section, "fan_speed") == 1.0
+    assert cp.getfloat(section, "shutdown_speed") == 0.0
+    assert cp.getfloat(section, "kick_start_time") == 0.0
+    assert not cp.has_section("output_pin DC24V_CTL")
+
+
+@pytest.mark.parametrize("model", MODELS)
 def test_no_output_pin_is_claimed_twice(model):
     cp = _parse(model)
     claims = {}

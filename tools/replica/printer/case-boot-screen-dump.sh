@@ -1,5 +1,5 @@
 #!/bin/sh
-# Render every first-boot screen inside the replica and print each one as a
+# Render every boot-screen phase inside the replica and print each one as a
 # base64 PNG on stdout.
 #
 # This is the answer to "I want to SEE it, not read assertions about it". The
@@ -27,18 +27,20 @@ W, H, BPP = 480, 800, 32   # the real framebuffer: portrait
 # Keep in step with bin/preview-boot-screen.py, which renders the same list
 # on the host -- the two are expected to agree byte for byte.
 PHASES = [
-    ('starting-services', 'STARTING SERVICES', 0.05, ''),
-    ('mcu-boards', 'WAKING THE TOOLHEAD BOARDS', 0.05, ''),
-    ('mcu-heater', 'WAKING THE HEATER BOARD', 0.08, ''),
-    ('mcu-both', 'WAKING THE HEATER BOARD AND THE LEVEL BOARD', 0.08, ''),
-    ('waiting', 'WAITING FOR THE PRINTER', 0.22, ''),
-    ('importing', 'READING FACTORY CALIBRATION', 0.5, ''),
-    ('saving', 'SAVING CALIBRATION', 0.7, ''),
-    ('restarting', 'RESTARTING THE PRINTER', 0.85, ''),
-    ('complete', 'SETUP COMPLETE', 1.0, ''),
-    ('already', 'ALREADY CALIBRATED', 1.0, ''),
+    ('launching-services', 'LAUNCHING SERVICES', 0.02, ''),
+    ('mcu-boards', 'WAKING THE TOOLHEAD BOARDS', 0.12, ''),
+    ('mcu-heater', 'WAKING THE HEATER BOARD', 0.18, ''),
+    ('mcu-both', 'WAKING THE HEATER BOARD AND THE LEVEL BOARD', 0.18, ''),
+    ('starting-services', 'STARTING SERVICES', 0.30, ''),
+    ('moonraker', 'STARTING MOONRAKER', 0.45, ''),
+    ('klipper', 'STARTING KLIPPER', 0.60, ''),
+    ('ready', 'KLIPPER IS READY', 0.78, ''),
+    ('importing', 'READING FACTORY CALIBRATION', 0.82, ''),
+    ('saving', 'SAVING CALIBRATION', 0.88, ''),
+    ('restarting', 'RESTARTING KLIPPER', 0.94, ''),
+    ('complete', 'STARTUP COMPLETE', 1.0, ''),
 ]
-RETRY = 'SETUP WILL RETRY ON NEXT START'
+RETRY = 'STARTUP WILL RETRY ON NEXT BOOT'
 LOG = '/USR/DATA/LOGS/ANVIL-BOOT.LOG'
 for slug, reason in [
         ('fail-moonraker', 'MOONRAKER IS NOT RESPONDING'),
@@ -54,12 +56,14 @@ for slug, reason in [
         ('fail-restart', 'KLIPPER DID NOT RESTART AFTER SAVING'),
         ('fail-unsaved', 'THE CALIBRATION DID NOT SAVE')]:
     PHASES.append((slug, RETRY, None, '%s. DETAILS IN %s' % (reason, LOG)))
-NO_NOTE = ('complete', 'already')
+NO_NOTE = ('complete',)
 for name, status, prog, detail in PHASES:
     open('/tmp/fb', 'wb').close()
     s = ffscreen.Screen('/tmp/fb', geometry=(W, H, BPP))
-    note = '' if (name in NO_NOTE or detail) else 'DO NOT TURN THE PRINTER OFF'
-    s.show('SETTING UP YOUR PRINTER', status, note, prog, detail, bool(detail))
+    calibration = name in ('importing', 'saving', 'restarting')
+    note = ('' if (name in NO_NOTE or detail) else
+            'DO NOT TURN THE PRINTER OFF' if calibration else 'PLEASE WAIT')
+    s.show('REFORGE IS STARTING', status, note, prog, detail, bool(detail))
     buf = open('/tmp/fb', 'rb').read()
 
     # Emit what the EYE sees, not the buffer: the panel is this portrait

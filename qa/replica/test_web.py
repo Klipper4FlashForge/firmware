@@ -80,6 +80,62 @@ def test_nginx_is_listening(web):
     assert web.listening(80), "nothing is listening on :80"
 
 
+def _get(box, port, path):
+    return box.sh("wget -q -O - 'http://127.0.0.1:%d%s'" % (port, path))
+
+
+def _get_error_body(box, port, path):
+    """Read an nginx error response body; BusyBox wget discards it."""
+    probe = "/tmp/anvil-http-error-body.py"
+    box.write(probe, (
+        "import sys\n"
+        "from urllib.error import HTTPError\n"
+        "from urllib.request import urlopen\n"
+        "try:\n"
+        "    response = urlopen(sys.argv[1])\n"
+        "except HTTPError as error:\n"
+        "    response = error\n"
+        "sys.stdout.buffer.write((str(response.status) + '\\n').encode()"
+        " + response.read())\n"))
+    got = box.sh("%s/bin/python3.13 %s 'http://127.0.0.1:%d%s'"
+                 % (MODDIR, probe, port, path))
+    assert got.ok, "could not read nginx response: %s" % got.text
+    status, _, body = got.out.partition("\n")
+    return int(status), body
+
+
+def test_mainsail_serves_its_shell_for_client_side_routes(web):
+    index = _get(web, 80, "/")
+    status, body = _get_error_body(
+        web, 80, "/dashboard/this-route-does-not-exist")
+    assert index.ok and index.out, "Mainsail returned no index page: %s" % index.text
+    assert status == 404
+    assert body == index.out, "Mainsail route did not return its index page"
+
+
+def test_fluidd_is_installed_and_listening(web):
+    assert web.file(MODDIR + "/www/fluidd/index.html").exists, (
+        "anvil-fluidd installed no index.html")
+    assert web.listening(81), "nothing is listening on Fluidd's :81"
+
+
+def test_fluidd_serves_its_shell_for_client_side_routes(web):
+    index = _get(web, 81, "/")
+    status, body = _get_error_body(
+        web, 81, "/dashboard/this-route-does-not-exist")
+    assert index.ok and index.out, "Fluidd returned no index page: %s" % index.text
+    assert status == 404
+    assert body == index.out, "Fluidd route did not return its index page"
+
+
+def test_fluidd_proxies_moonraker(web):
+    direct = _get(web, 7125, "/server/info")
+    proxied = _get(web, 81, "/server/info")
+    assert direct.ok, "Moonraker did not answer directly: %s" % direct.text
+    assert proxied.ok, "Fluidd did not proxy Moonraker: %s" % proxied.text
+    assert proxied.out == direct.out
+
+
 def test_nginx_comes_back_after_a_kill(web):
     """The reason for shipping a supervisor at all. `s6-svc -wr` does not
     return until s6 has it running again, so this is a verdict rather than a

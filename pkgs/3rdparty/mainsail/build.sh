@@ -10,7 +10,7 @@
 # and the rest at the root of the archive, so $PKG_WORK/src IS the web root
 # after unpacking and gets copied wholesale to www/mainsail. This was checked
 # against the pinned artefact rather than assumed -- an archive that grew a
-# wrapper directory would put the UI at www/mainsail/mainsail-2.18.2/ and
+# wrapper directory would put the UI below www/mainsail/ and
 # serve a 404 from a build that looked clean, so the assertion below is the
 # thing standing between that and a printer.
 set -euo pipefail

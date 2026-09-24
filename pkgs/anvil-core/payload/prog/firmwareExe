@@ -75,7 +75,8 @@ splash() {
     [ -f $MODDIR/bin/ffscreen.py ] || return 0
     "$FF_PYTHON" $MODDIR/bin/ffscreen.py "$@" 2>/dev/null || true
 }
-splash --title "REFORGE" --status "STARTING THE PRINTER" --progress 0.02
+splash --title "REFORGE IS STARTING" --status "LAUNCHING SERVICES" \
+       --note "PLEASE WAIT" --progress 0.02
 
 # ---- the supervision tree ------------------------------------------------
 #

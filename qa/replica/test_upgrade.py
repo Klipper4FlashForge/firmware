@@ -70,6 +70,10 @@ LOG = "/usr/data/anvil-install.log"
 # "old firmware, upgradeable".
 INSTALLER = "/tmp/anvil-installer.sh"
 SOURCE = ROOT / "installer" / "runFirmwareExe.sh"
+LINK_SOURCE = (ROOT / "pkgs" / "anvil-core" / "payload" / "bin" /
+               "anvil-link-prog.sh")
+MIGRATION_SOURCE = (ROOT / "pkgs" / "anvil-core" / "payload" / "bin" /
+                    "anvil-migrate-printer-config.sh")
 
 # Where the two payloads are built, and where the installer looks for one.
 BUILD = "/tmp/anvil-qa"
@@ -188,14 +192,14 @@ def upgraded(first_install):
     release. All of them must go, and the wipe is the only thing that takes
     them -- there is no list that names any of them.
 
-    Two things must survive, and are planted with values that could only have
-    come from this printer: HelixScreen's settings.json, and an edited
-    moonraker.conf in the live config directory, which is outside $MODDIR and
-    must be overwritten anyway because the mod owns it.
+    Three user values are planted: HelixScreen's settings.json and a custom
+    boot script must survive, while an edited moonraker.conf in the live
+    config directory must be overwritten because the mod owns it.
 
     Version 2 drops helper-v1 and oldskin/, splits share/web-launcher in two --
     the rename that started all this -- and ships a settings.json and a
-    moonraker.conf of its own for the two survivors to be measured against.
+    moonraker.conf of its own so preservation and replacement are both
+    measured against content that could only have come from this printer.
     """
     box = first_install
     planted = box.sh(
@@ -216,7 +220,10 @@ def upgraded(first_install):
         # and not a second seeding pass.
         "mkdir -p %(cfgdir)s\n"
         "echo 'edited by hand' > %(cfgdir)s/moonraker.conf\n"
-        "echo 'tuned by hand' > %(cfgdir)s/printer.cfg\n"
+        # User-owned boot scripts live beside config, outside the payload tree
+        # that the upgrade wipes.
+        "mkdir -p /usr/data/anvil-data/scripts\n"
+        "echo 'echo owner script' > /usr/data/anvil-data/scripts/owner.sh\n"
         "mkdir -p %(build)s/v2/bin %(build)s/v2/share %(build)s/v2/www "
         "%(build)s/v2/helixscreen/config %(build)s/v2/config\n"
         "echo '#!/bin/sh' > %(build)s/v2/bin/anvil-hello\n"
@@ -231,6 +238,27 @@ def upgraded(first_install):
         % {"build": BUILD, "mod": MODDIR, "cfgdir": CONFIG_DIR})
     if not planted.ok:
         pytest.fail("could not set up the upgrade: %s" % planted.text)
+
+    # This is the FlashForge section shape the release has to migrate. Stage
+    # the checkout's real link and migration scripts into the synthetic upgrade:
+    # runFirmwareExe.sh will chmod and invoke them exactly as a release does.
+    box.write(
+        CONFIG_DIR + "/printer.cfg",
+        "[printer]\nkinematics: corexy\n"
+        "# tuned by hand\n\n"
+        "[output_pin DC24V_CTL]\n"
+        "pin: eheaterboard:PA3\n"
+        "value: 0\n"
+        "shutdown_value: 0\n\n"
+        "[gcode_macro KEEP_ME]\n"
+        "gcode:\n    M117 kept\n"
+        "#*# <---------------------- SAVE_CONFIG ---------------------->\n"
+        "#*# [ff_tool_offset]\n"
+        "#*# station_z = -1.23\n")
+    box.write(BUILD + "/v2/bin/anvil-link-prog.sh",
+              LINK_SOURCE.read_text())
+    box.write(BUILD + "/v2/bin/anvil-migrate-printer-config.sh",
+              MIGRATION_SOURCE.read_text())
 
     _pack(box, BUILD + "/v2")
     box.upgrade_log = _install(box)
@@ -414,9 +442,35 @@ def test_the_live_printer_cfg_survives_the_update(upgraded):
     assert live.exists, (
         "%s/printer.cfg is gone after an update -- the printer has no config "
         "to start from" % CONFIG_DIR)
-    assert live.text.strip() == "tuned by hand", (
-        "%s/printer.cfg was rewritten by the update: %r"
+    assert "# tuned by hand" in live.text, (
+        "%s/printer.cfg lost the owner's edit: %r" % (CONFIG_DIR, live.text))
+    assert "[gcode_macro KEEP_ME]" in live.text and "M117 kept" in live.text, (
+        "%s/printer.cfg lost a neighboring user section: %r"
         % (CONFIG_DIR, live.text))
+    assert "#*# station_z = -1.23" in live.text, (
+        "%s/printer.cfg lost its SAVE_CONFIG data: %r"
+        % (CONFIG_DIR, live.text))
+
+
+def test_the_upgrade_migrates_flashforges_dc24v_output_pin(upgraded):
+    """The release upgrade path, under BusyBox, not only the host-side unit.
+
+    FlashForge writes this section into printer.cfg. The new base config owns
+    the same PA3 pin as a heater_fan, so leaving the old section makes Klipper
+    reject the duplicate pin at startup.
+    """
+    live = upgraded.file(CONFIG_DIR + "/printer.cfg").text
+    assert "output_pin DC24V_CTL" not in live
+    assert "eheaterboard:PA3" not in live
+    assert "removed obsolete [output_pin DC24V_CTL]" in upgraded.upgrade_log, (
+        "the section disappeared without the migration reporting it:\n%s"
+        % _tail(upgraded.upgrade_log))
+
+
+def test_user_boot_scripts_survive_the_payload_wipe(upgraded):
+    script = upgraded.file("/usr/data/anvil-data/scripts/owner.sh")
+    assert script.exists, "the upgrade deleted the user's custom boot script"
+    assert script.text.strip() == "echo owner script"
 
 
 def test_moonraker_conf_is_overwritten_even_when_edited(upgraded):

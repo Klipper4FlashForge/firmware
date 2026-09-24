@@ -47,7 +47,7 @@ say "payload: installing the feed with the printer's own apk"
 # is the one command that has to work on a printer.
 MOD_ROOTS="anvil-core anvil-s6-rc anvil-klipper
            anvil-moonraker anvil-python-pillow anvil-python-preprocess-cancellation
-           anvil-mainsail anvil-helixscreen anvil-busybox anvil-sntpd"
+           anvil-mainsail anvil-fluidd anvil-helixscreen anvil-busybox anvil-sntpd"
 
 # THE PACKAGE MANAGER IS A ROOT TOO. Appended rather than written into the
 # list above so that the list stays a literal one: qa/static reads it out of

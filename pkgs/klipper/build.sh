@@ -72,6 +72,14 @@ rm -rf "$PKG_WORK/stage$MODDIR/klipper/docs/_klipper3d"
 for _e in "$PKG_DIR"/payload/klipper/klippy/extras/ff_*.py; do
     pkg_stage "$_e" "klipper/klippy/extras/$(basename "$_e")"
 done
+# Upstream keeps exclude-object's spatial offsets per extruder but shares the
+# retraction maxima and pending adjustment between them. A tool change after
+# cancelling an object can therefore attach the old tool's E history to the
+# new tool's travel. This complete extra overlays the pinned fork's copy just
+# like the ff_ extras above; qa/static/test_exclude_object.py holds the
+# multi-extruder regression.
+pkg_stage "$PKG_DIR/payload/klipper/klippy/extras/exclude_object.py" \
+          "klipper/klippy/extras/exclude_object.py"
 
 # FLASHFORGE'S OWN chelper, at $MODDIR/prog/stock-chelper and never on klippy's
 # path. anvil-link-prog.sh puts it back over /usr/prog/klipper/klippy/chelper

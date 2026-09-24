@@ -51,6 +51,7 @@ pytestmark = pytest.mark.static
 # under the printer's ash, and a bashism in one is a service that never starts
 # and says so only in s6's own log.
 SYNTAX_GLOBS = ("bin/*.sh", "pkgs/*/payload/*.sh",
+                "pkgs/*/payload/bin/*.sh",
                 "pkgs/*/payload/prog/*.sh", "pkgs/*/payload/prog/firmwareExe",
                 # FlashForge's own klipperDaemon, restored onto printers byte
                 # for byte. It is in the parse list and NOT in the ash list
@@ -89,9 +90,8 @@ SYNTAX_GLOBS = ("bin/*.sh", "pkgs/*/payload/*.sh",
 # nothing between it and the machine. A bashism in it is a package that
 # unpacks and then does nothing.
 #
-# NOT here, and a real gap rather than a decision: pkgs/*/payload/bin/*.sh.
-# wifi-action.sh runs on the printer and no lane checks its dialect.
 ASH_GLOBS = ("pkgs/*/payload/*.sh",
+             "pkgs/*/payload/bin/*.sh",
              "pkgs/*/payload/prog/*.sh", "pkgs/*/payload/prog/firmwareExe",
              "pkgs/*/payload/etc/s6-rc/" + "source/*/run",
              "installer/*.sh", "qa/replica/actions/*.sh")

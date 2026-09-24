@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Render the first-boot screen to PNGs so you can LOOK at it.
+# Render the boot screen to PNGs so you can LOOK at it.
 #
 # payload/bin/ffscreen.py draws onto a framebuffer, which is a flat array of
 # pixels and therefore untestable by reading the code. This wraps it in the
@@ -10,8 +10,8 @@
 #
 # The default size is the real one: the framebuffer is PORTRAIT 480x800 and
 # the panel is that buffer turned 90 degrees clockwise, so what is written
-# here is rotated back before it becomes a PNG. It renders every phase the
-# migration goes through, in order.
+# here is rotated back before it becomes a PNG. It renders the normal boot and
+# first-boot calibration phases in order.
 import argparse
 import glob
 import importlib.util
@@ -25,18 +25,20 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Every (status, progress) ff-startup.py can put on the panel, in the
 # order it happens. Keep this in step with the panel.say() calls there.
 PHASES = [
-    ('starting-services', 'STARTING SERVICES', 0.05),
-    ('mcu-boards', 'WAKING THE TOOLHEAD BOARDS', 0.05),
-    ('mcu-heater', 'WAKING THE HEATER BOARD', 0.08),
-    ('mcu-both', 'WAKING THE HEATER BOARD AND THE LEVEL BOARD', 0.08),
-    ('waiting', 'WAITING FOR THE PRINTER', 0.22),
-    ('importing', 'READING FACTORY CALIBRATION', 0.5),
-    ('saving', 'SAVING CALIBRATION', 0.7),
-    ('restarting', 'RESTARTING THE PRINTER', 0.85),
-    ('complete', 'SETUP COMPLETE', 1.0),
-    ('already', 'ALREADY CALIBRATED', 1.0),
+    ('launching-services', 'LAUNCHING SERVICES', 0.02),
+    ('mcu-boards', 'WAKING THE TOOLHEAD BOARDS', 0.12),
+    ('mcu-heater', 'WAKING THE HEATER BOARD', 0.18),
+    ('mcu-both', 'WAKING THE HEATER BOARD AND THE LEVEL BOARD', 0.18),
+    ('starting-services', 'STARTING SERVICES', 0.30),
+    ('moonraker', 'STARTING MOONRAKER', 0.45),
+    ('klipper', 'STARTING KLIPPER', 0.60),
+    ('ready', 'KLIPPER IS READY', 0.78),
+    ('importing', 'READING FACTORY CALIBRATION', 0.82),
+    ('saving', 'SAVING CALIBRATION', 0.88),
+    ('restarting', 'RESTARTING KLIPPER', 0.94),
+    ('complete', 'STARTUP COMPLETE', 1.0),
 ]
-NO_NOTE = ('complete', 'already')
+NO_NOTE = ('complete',)
 
 # Every way the migration can end badly, with the reason it puts on the panel.
 # Kept in step with the panel.failed() calls in ff-startup.py.
@@ -54,7 +56,7 @@ FAILURES = [
     ('fail-restart', 'KLIPPER DID NOT RESTART AFTER SAVING'),
     ('fail-unsaved', 'THE CALIBRATION DID NOT SAVE'),
 ]
-RETRY = 'SETUP WILL RETRY ON NEXT START'
+RETRY = 'STARTUP WILL RETRY ON NEXT BOOT'
 LOGFILE = '/USR/DATA/LOGS/ANVIL-BOOT.LOG'
 
 
@@ -149,8 +151,10 @@ def main(argv):
         screen = ffscreen.Screen(fb, geometry=geometry, rotate=args.rotate)
         if not screen.ok:
             raise SystemExit('ffscreen refused this geometry: %s' % args.size)
-        note = '' if (name in NO_NOTE or detail) else 'DO NOT TURN THE PRINTER OFF'
-        screen.show('SETTING UP YOUR PRINTER', status, note, progress,
+        calibration = name in ('importing', 'saving', 'restarting')
+        note = ('' if (name in NO_NOTE or detail) else
+                'DO NOT TURN THE PRINTER OFF' if calibration else 'PLEASE WAIT')
+        screen.show('REFORGE IS STARTING', status, note, progress,
                     detail, bool(detail))
         with open(fb, 'rb') as fh:
             buf = fh.read()

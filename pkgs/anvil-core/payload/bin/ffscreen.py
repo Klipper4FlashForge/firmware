@@ -1,14 +1,14 @@
 # A few lines of text on /dev/fb0, for the moments when nothing else owns the
 # screen and the printer would otherwise look dead.
 #
-# The first boot after a flash runs ff-startup.py before HelixScreen, and that
-# can take a couple of minutes with the panel black. That reads as a brick,
-# and the fix people reach for is a power cut -- the one thing that can leave
-# the config half-written. So: no toolkit, no fonts on disk, no dependencies,
-# just a plain framebuffer.
+# Every boot runs ff-startup.py before HelixScreen while the boards, Klipper,
+# and Moonraker come up. The first one also imports calibration and can take a
+# couple of minutes. A black panel reads as a brick, and the fix people reach
+# for is a power cut -- the one thing that can leave the config half-written.
+# So: no toolkit, no fonts on disk, no dependencies, just a plain framebuffer.
 #
 # EVERY failure here is swallowed and turns the screen off, never into an
-# error: this is decoration on top of a migration that must finish regardless.
+# error: this is decoration on top of startup that must finish regardless.
 #
 # THE GEOMETRY IS HARDCODED, NOT READ FROM SYSFS: measured on real hardware,
 # sysfs reports a geometry that does not match this panel, and trusting it

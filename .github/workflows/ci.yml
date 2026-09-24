@@ -136,6 +136,7 @@ jobs:
           # build-packages.sh like every other one.
           cat > config.env <<'CFG'
           BUILD_MAINSAIL=0
+          BUILD_FLUIDD=0
           BUILD_HELIX=0
           BUILD_MOONRAKER=0
           CFG

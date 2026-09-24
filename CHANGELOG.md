@@ -10,6 +10,10 @@ Release preparation and documentation sweep.
 
 ### Added
 
+- Fluidd is available beside Mainsail at `http://<printer-ip>:81/`, using the
+  same Moonraker API and webcam proxy.
+- Custom `*.sh` files in `/usr/data/anvil-data/scripts` run in filename order
+  during boot, survive updates, and write `/usr/data/logs/custom-scripts.log`.
 - The installer refuses to install on a printer running FlashForge firmware
   older than 1.9.6, and says to install FlashForge's current firmware first.
   On those releases the board firmware and Klipper do not agree, the MCU never
@@ -21,6 +25,14 @@ Release preparation and documentation sweep.
 
 ### Changed
 
+- The normal boot screen says that Reforge is starting, names Moonraker and
+  Klipper while it waits, and advances its progress bar through a complete
+  normal boot instead of describing every boot as printer setup.
+- Mainsail is updated to 2.19.0. Both web interfaces now return their SPA
+  shell for client-side routes while keeping API routes behind Moonraker.
+- Filament load and unload use the selected tool's saved material and shorter,
+  overridable feed lengths; loading finishes with a retract.
+- The X and Y rotation distances are both 40.4.
 - Klipper's and Moonraker's config now live in Reforge's own directory,
   `/usr/data/anvil-data/config`, seeded once on the first install with a copy
   of `printer.cfg` and the config files beside it. FlashForge's
@@ -39,6 +51,11 @@ Release preparation and documentation sweep.
 
 ### Fixed
 
+- Upgrading removes FlashForge's obsolete `[output_pin DC24V_CTL]` section
+  when present, before the mod configures PA3 as a heater-following 24 V
+  control.
+- Object cancellation keeps extrusion and retraction history separate for
+  every tool instead of carrying one tool's adjustment into another.
 - Flashing the stock FlashForge package back over Reforge no longer leaves the
   printer with a Klipper config it cannot resolve. `/usr/data` is the data
   partition, so a stock flash does not clean it: the symlinked

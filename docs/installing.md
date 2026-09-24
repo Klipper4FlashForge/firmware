@@ -104,7 +104,7 @@ The first boot after a flash is longer than the ones after it, and the screen
 shows a progress bar rather than HelixScreen for most of it. What you'll see,
 partway through and at the end:
 
-<img src="boot-screen/importing.png" width="48%" alt="Boot screen: reading factory calibration"> <img src="boot-screen/complete.png" width="48%" alt="Boot screen: setup complete">
+<img src="boot-screen/importing.png" width="48%" alt="Boot screen: Reforge is starting and reading factory calibration"> <img src="boot-screen/complete.png" width="48%" alt="Boot screen: Reforge startup complete">
 
 Two things happen that happen only once:
 
@@ -142,8 +142,10 @@ Nothing you have to configure. The package brings its own Klipper additions
 and config files with it and wires them up itself, so the printer comes up
 working.
 
-**Your `printer.cfg` is never touched** — not by this flash and not by any
-update. It is your file, and it is where your own settings go.
+**Your `printer.cfg` is preserved** across every flash and update. One narrow
+hardware migration removes FlashForge's `[output_pin DC24V_CTL]`, because the
+mod-owned base config replaces it with `[heater_fan dc24v_ctl]` on the same
+pin. Your other settings and `SAVE_CONFIG` data are left in place.
 
 The first flash does copy it. Reforge keeps its Klipper config in a directory
 of its own, `/usr/data/anvil-data/config`, and seeds it once with your

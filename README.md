@@ -38,6 +38,8 @@ A checked box happened on that machine; an empty one has not, yet.
 - [x] **Nozzle-offset calibration**
 - [x] **Mainsail** at `http://<printer-ip>/`, with a current Moonraker behind
   it — anything that speaks the Klipper API works
+- [ ] **Fluidd** at `http://<printer-ip>:81/`, beside Mainsail and using the
+  same Moonraker and camera
 - [x] **Camera** — mjpg-streamer, already on the printer; the mod just
   starts it
 - [x] **Wifi**
@@ -55,6 +57,8 @@ A checked box happened on that machine; an empty one has not, yet.
 - [x] **ssh as root** — a random password is chosen on the **first** install
   and written to `anvil-password.txt` on your stick; updates keep it
   (`make passwd` bakes in your own)
+- [ ] **Custom boot scripts** — ordered `*.sh` hooks under
+  `/usr/data/anvil-data/scripts`, preserved across updates and logged
 
 ---
 

@@ -20,8 +20,10 @@ with Klipper and a toolchanger-aware web and touchscreen experience.
 | VFA calibration | Klipper VFA support with required MCU library and dependency | ✅ Yes |
 | Chamber | Pro heater/light configuration and heater-following fan; heater-free Creator 5 config | ✅ Yes |
 | Mainsail | Mainsail over Moonraker, webcam stream, Klipper API compatibility | ✅ Yes |
+| Fluidd | Fluidd on port 81, beside Mainsail, using the same Moonraker and webcam | ✅ Yes |
 | Screen | HelixScreen with tool/material-aware filament controls and persistent settings | ✅ Yes |
 | SSH | Root access with per-printer first-install password on the USB stick | ✅ Yes |
+| Custom boot scripts | Persistent, ordered `*.sh` hooks with a separate boot log | ✅ Yes |
 | Updates | APK feed, signed packages, preserved user settings and password | ✅ Yes |
 
 \* Pressure advance is a manual check. See the [pressure advance calibration

@@ -99,7 +99,9 @@ cooperate.
 (recovered from the binary — [`docs/notes/47-filament-load-recovered.md`](notes/47-filament-load-recovered.md)):
 each tool has its own direct-drive extruder, so loading means *grab the tool,
 drive it to the purge chute at the back right (X275 Y254), heat to material
-temperature + 30, push 150 + 145 mm at F240, park the tool, heater off*.
+temperature + 30, feed the filament, retract 5 mm, park the tool, heater off*.
+The stock app feeds 150 + 145 mm; the mod defaults to 80 + 50 mm and accepts
+`LENGTH=` and `RETRACT=` overrides.
 
 ```gcode
 LOAD_FILAMENT TOOL=1 TEMP=220          ; or MATERIAL=PETG (app's temperature table)
@@ -108,7 +110,8 @@ PURGE TOOL=1 PURGE_TEMP=220 LENGTH=50  ; app's clearNozzlePrint purge + cold wip
 ```
 
 * `TOOL` defaults to the mounted tool; `RELEASE=0` keeps the tool on the
-  carriage afterwards, `HEAT_OFF=0` leaves the heater on.
+  carriage afterwards, `HEAT_OFF=0` leaves the heater on. With no explicit
+  `MATERIAL=`, load and unload use the material assigned to that tool.
 * `PURGE` ends the way the app's pre-print clean does: the nozzle rests on
   the front-right wipe spot (266.5, 13.8) 1 mm above the eddy trigger height
   while the hotend cools by 100 °C, then lifts — the purge string freezes

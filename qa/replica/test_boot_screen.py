@@ -1,4 +1,4 @@
-"""The first-boot screen, drawn by the printer's own interpreter.
+"""The boot screen, drawn by the printer's own interpreter.
 
 A port of the retired test/integration/printer/case-boot-screen.sh.
 
@@ -166,7 +166,7 @@ def frame(box, palette):
                    # The first-boot frame itself: title, status, note,
                    # progress -- the same call ff-startup.py makes while
                    # klipper is finding its MCUs.
-                   "s.show('SETTING UP YOUR PRINTER', 'READING FACTORY CALIBRATION',\n"
+                   "s.show('REFORGE IS STARTING', 'READING FACTORY CALIBRATION',\n"
                    "       'DO NOT TURN THE PRINTER OFF', 0.5)\n"
                    "buf = open(%r, 'rb').read()\n"
                    "print('stride', s.stride)\n"
