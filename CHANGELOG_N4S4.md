@@ -50,6 +50,14 @@ to `/usr/data`.
 - The flag is cleared in all success and failure paths; a sensor state that
   remains inconsistent after the operation is still reported as an error.
 
+### Visible toolchanger status macro
+
+- The native status command is registered internally as
+  `FF_TOOLCHANGE_STATUS`.
+- `printer_n4s4.cfg` exposes the public `TOOLCHANGE_STATUS` command as a real
+  `[gcode_macro]`, so Mainsail displays it as a macro tile while existing
+  console usage remains unchanged.
+
 ### Prime-tower-aware restored position
 
 - The existing `restore_axis` support in Klipper4FlashForge is enabled for
