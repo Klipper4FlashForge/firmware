@@ -59,6 +59,9 @@ the pre-print purge sequence.
 - Report `TOOLCHANGE_PARK` as `changing` throughout the release operation so
   HelixScreen does not turn the normal dock/grab sensor transition into a
   transient `Filament System Error`; persistent sensor faults remain errors.
+- Expose `TOOLCHANGE_STATUS` through a real `[gcode_macro]` wrapper so it is
+  available as a Mainsail macro tile; the Python implementation remains an
+  internal `FF_TOOLCHANGE_STATUS` command.
 - Add configurable XY restoration speed and a 2 mm Z-hop for travel both to
   and from the docks.
 - Retract filament while the newly selected hot tool is still fully seated in

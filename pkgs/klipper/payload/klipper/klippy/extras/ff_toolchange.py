@@ -347,7 +347,7 @@ class FFToolchange:
             self.gcode.register_command(
                 'T%d' % i, self._make_tn(i), desc="Select tool %d" % i)
         self.gcode.register_command(
-            'TOOLCHANGE_STATUS', self.cmd_TOOLCHANGE_STATUS,
+            'FF_TOOLCHANGE_STATUS', self.cmd_TOOLCHANGE_STATUS,
             desc=self.cmd_TOOLCHANGE_STATUS_help)
         self.gcode.register_command(
             'TOOLCHANGE_PARK', self.cmd_TOOLCHANGE_PARK,

@@ -10,6 +10,8 @@ from lib.paths import ROOT
 
 MODULE = (ROOT / "pkgs" / "klipper" / "payload" / "klipper" /
           "klippy" / "extras" / "ff_toolchange.py")
+CONFIG = (ROOT / "pkgs" / "klipper-config" / "payload" / "config" /
+          "printer_n4s4.cfg")
 
 
 @pytest.fixture(scope="module")
@@ -87,3 +89,12 @@ def test_park_clears_changing_after_failure(ff_toolchange):
 
     assert toolchanger.status_seen_during_release == "changing"
     assert toolchanger.changing is False
+
+
+def test_status_command_is_exposed_as_a_mainsail_macro():
+    module_source = MODULE.read_text(encoding="utf-8")
+    config_source = CONFIG.read_text(encoding="utf-8")
+
+    assert "'FF_TOOLCHANGE_STATUS', self.cmd_TOOLCHANGE_STATUS" in module_source
+    assert "[gcode_macro TOOLCHANGE_STATUS]" in config_source
+    assert "    FF_TOOLCHANGE_STATUS" in config_source
