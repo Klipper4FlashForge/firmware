@@ -6,7 +6,9 @@ both printer models or through every real-world workflow.
 
 ## Unreleased
 
-Release preparation and documentation sweep.
+Nothing yet.
+
+## v20260827f-melitopol — 2026-09-24
 
 ### Added
 
@@ -14,14 +16,6 @@ Release preparation and documentation sweep.
   same Moonraker API and webcam proxy.
 - Custom `*.sh` files in `/usr/data/anvil-data/scripts` run in filename order
   during boot, survive updates, and write `/usr/data/logs/custom-scripts.log`.
-- The installer refuses to install on a printer running FlashForge firmware
-  older than 1.9.6, and says to install FlashForge's current firmware first.
-  On those releases the board firmware and Klipper do not agree, the MCU never
-  connects, and the printer comes up with no Klipper and no screen — which
-  looks like a bad flash rather than a mismatch. Nothing is written to the
-  printer when the gate refuses: it puts the reason on the panel, leaves
-  `anvil-NOT-INSTALLED.txt` on the USB stick, and the printer boots as it did
-  before. A version it cannot read is installed on, as before.
 
 ### Changed
 
@@ -33,6 +27,30 @@ Release preparation and documentation sweep.
 - Filament load and unload use the selected tool's saved material and shorter,
   overridable feed lengths; loading finishes with a retract.
 - The X and Y rotation distances are both 40.4.
+
+### Fixed
+
+- Upgrading removes FlashForge's obsolete `[output_pin DC24V_CTL]` section
+  when present, before the mod configures PA3 as a heater-following 24 V
+  control.
+- Object cancellation keeps extrusion and retraction history separate for
+  every tool instead of carrying one tool's adjustment into another.
+
+## v20260827e-melitopol — 2026-09-11
+
+### Added
+
+- The installer refuses to install on a printer running FlashForge firmware
+  older than 1.9.6, and says to install FlashForge's current firmware first.
+  On those releases the board firmware and Klipper do not agree, the MCU never
+  connects, and the printer comes up with no Klipper and no screen — which
+  looks like a bad flash rather than a mismatch. Nothing is written to the
+  printer when the gate refuses: it puts the reason on the panel, leaves
+  `anvil-NOT-INSTALLED.txt` on the USB stick, and the printer boots as it did
+  before. A version it cannot read is installed on, as before.
+
+### Changed
+
 - Klipper's and Moonraker's config now live in Reforge's own directory,
   `/usr/data/anvil-data/config`, seeded once on the first install with a copy
   of `printer.cfg` and the config files beside it. FlashForge's
@@ -51,11 +69,6 @@ Release preparation and documentation sweep.
 
 ### Fixed
 
-- Upgrading removes FlashForge's obsolete `[output_pin DC24V_CTL]` section
-  when present, before the mod configures PA3 as a heater-following 24 V
-  control.
-- Object cancellation keeps extrusion and retraction history separate for
-  every tool instead of carrying one tool's adjustment into another.
 - Flashing the stock FlashForge package back over Reforge no longer leaves the
   printer with a Klipper config it cannot resolve. `/usr/data` is the data
   partition, so a stock flash does not clean it: the symlinked
