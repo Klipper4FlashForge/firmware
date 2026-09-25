@@ -187,7 +187,7 @@ TOOLCHANGE_SET_MATERIAL_OFFSET VALUE=0.000
 - `pkgs/timelapse/build.sh`
 - `pkgs/timelapse/pkg.conf`
 - `pkgs/klipper-config/build.sh`
-- `pkgs/klipper-config/control/postinst`
+- `pkgs/anvil-core/payload/bin/anvil-link-prog.sh`
 - `qa/static/test_n4s4_include_installer.py`
 - `qa/static/test_timelapse_config.py`
 - `qa/replica/test_custom_scripts.py`
