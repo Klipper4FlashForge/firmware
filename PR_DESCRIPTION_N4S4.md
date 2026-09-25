@@ -183,9 +183,13 @@ TOOLCHANGE_SET_MATERIAL_OFFSET VALUE=0.000
 - `/usr/data/anvil-data/config/timelapse.cfg`
 - `/usr/data/anvil-data/config/printer.cfg`
 - `/usr/data/anvil-data/scripts/10-enable-printer-n4s4.sh`
+- `pkgs/timelapse/payload/config/timelapse.cfg`
+- `pkgs/timelapse/build.sh`
+- `pkgs/timelapse/pkg.conf`
 - `pkgs/klipper-config/build.sh`
 - `pkgs/klipper-config/control/postinst`
 - `qa/static/test_n4s4_include_installer.py`
+- `qa/static/test_timelapse_config.py`
 - `qa/replica/test_custom_scripts.py`
 - `CHANGELOG_N4S4.md`
 - `ORCA_MACHINE_AND_FILAMENT_SETTINGS.md`
@@ -214,6 +218,12 @@ inserts the include before Klipper's `SAVE_CONFIG` area, and creates a backup
 only when it changes the file. No SSH installation step is required. Once the
 exact include exists, repeated boots exit immediately without adding script
 output to the log.
+
+The modified `timelapse.cfg` is part of the `anvil-timelapse` package rather
+than a manual file copied into the live configuration. It is installed under
+`/usr/data/anvil/config` and linked into `/usr/data/anvil-data/config` by the
+normal configuration-linking pass, so package upgrades update the macro while
+the live configuration keeps the expected path.
 
 The OrcaSlicer document contains the complete machine start G-code,
 build-plate name mapping, adaptive-mesh controls, and per-filament material

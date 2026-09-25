@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# moonraker-timelapse -- two files out of the pinned tarball. Nothing is
-# compiled, and the encoder is anvil-ffmpeg's problem, not this recipe's.
+# moonraker-timelapse -- the component from the pinned tarball plus the local
+# Creator 5 macro configuration. Nothing is compiled, and the encoder is
+# anvil-ffmpeg's problem, not this recipe's.
 #
 # UPSTREAM'S scripts/install.sh IS NOT USED: it clones into a home directory,
 # symlinks into a Moonraker checkout, appends to live config and registers an
@@ -23,8 +24,8 @@ _src="$PKG_WORK/src/moonraker-timelapse-$TIMELAPSE_VERSION"
 # would stage nothing, which is a clean build and a tab that never appears.
 [ -f "$_src/component/timelapse.py" ] || pkg_die \
     "timelapse: no component/timelapse.py in $(basename "$TIMELAPSE_TGZ")"
-[ -f "$_src/klipper_macro/timelapse.cfg" ] || pkg_die \
-    "timelapse: no klipper_macro/timelapse.cfg in $(basename "$TIMELAPSE_TGZ")"
+[ -f "$PKG_DIR/payload/config/timelapse.cfg" ] || pkg_die \
+    "timelapse: no local payload/config/timelapse.cfg"
 
 # Inside anvil-moonraker's directory, because Moonraker resolves a component
 # with import_module(".components.<name>", "moonraker") and looks nowhere else.
@@ -36,7 +37,7 @@ pkg_stage "$_src/component/timelapse.py" "moonraker/components/timelapse.py"
 # .cfg in it into /usr/data/anvil-data/config, the mod's own config directory,
 # where printer.base.cfg's [include timelapse.cfg] resolves. A link rather
 # than a copy, so an `apk upgrade` of this package changes what Klipper reads.
-pkg_stage "$_src/klipper_macro/timelapse.cfg" "config/timelapse.cfg"
+pkg_stage "$PKG_DIR/payload/config/timelapse.cfg" "config/timelapse.cfg"
 
 pkg_ship "moonraker/components/timelapse.py" "config/timelapse.cfg"
 pkg_end
