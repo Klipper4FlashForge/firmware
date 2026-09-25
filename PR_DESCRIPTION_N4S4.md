@@ -9,7 +9,8 @@ handling, incorrect prime-tower geometry in multi-plate projects, and the lack
 of separate build-plate and filament Z corrections.
 
 It also adds user-facing controls for adaptive meshing, timelapse capture, and
-the pre-print purge sequence.
+the pre-print purge sequence, plus a Creator 5-specific bed-mesh travel
+optimizer.
 
 ## Problems addressed
 
@@ -34,6 +35,8 @@ the pre-print purge sequence.
   first-layer Z corrections.
 - Pre-print purge behavior, adaptive meshing, and timelapse capture were not
   conveniently configurable from Mainsail.
+- Contact-probe mesh calibration spent unnecessary time repeatedly returning
+  to one fixed absolute Z travel height.
 
 ## Main changes
 
@@ -136,6 +139,17 @@ TOOLCHANGE_SET_MATERIAL_OFFSET VALUE=0.000
 - Disabled mode skips probing and loads the saved `MESH_DATA` profile.
 - Keep tool parking, Z homing, first-tool pickup, and print Z-offset setup in a
   safe order.
+- Add an `ff_bed_mesh.py` adapter for contact-probe meshes while retaining
+  Klipper's standard row-by-row point order.
+- Approach the first point at Z=5 mm, then lift 2 mm relative to the latest
+  trigger height. If the calculated transfer height is below Z=1 mm, recover
+  to Z=3 mm.
+- Recalculate that decision after every point instead of latching recovery
+  mode, so the next transfer returns to the normal 2 mm lift as soon as it is
+  safe.
+- Keep generic Klipper `bed_mesh.py` and `probe.py` unchanged and leave other
+  probe users unaffected.
+- `FF_BED_MESH_STATUS` reports the standard path and dynamic-Z parameters.
 
 ### Pre-print purge and filament checks
 
@@ -162,6 +176,7 @@ TOOLCHANGE_SET_MATERIAL_OFFSET VALUE=0.000
 ## Files changed
 
 - `/usr/data/anvil/klipper/klippy/extras/ff_extruder.py`
+- `/usr/data/anvil/klipper/klippy/extras/ff_bed_mesh.py`
 - `/usr/data/anvil/klipper/klippy/extras/ff_toolchange.py`
 - `/usr/data/anvil/klipper/klippy/extras/ff_print.py`
 - `/usr/data/anvil-data/config/printer_n4s4.cfg`

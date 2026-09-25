@@ -1,10 +1,28 @@
 # Creator 5 N4S4 – Change Log
 
-Last updated: 2026-09-23
+Last updated: 2026-09-24
 
 This document describes the local changes compared with the original
 FlashForge/Klipper4FlashForge implementation. All printer paths are relative
 to `/usr/data`.
+
+## `/usr/data/anvil/klipper/klippy/extras/ff_bed_mesh.py`
+
+### Reduced Z travel
+
+- Bed meshes retain Klipper's standard row-by-row point order.
+- The first probe position uses a safe absolute travel height of 5 mm.
+- Following positions lift only 2 mm above the latest probe trigger height.
+- If the calculated travel height would fall below Z=1 mm, the adapter uses
+  the recovery height Z=3 mm instead.
+- The decision is recalculated after every measurement. The recovery height
+  is not latched: probing returns automatically to the normal 2 mm relative
+  lift as soon as that produces a sufficiently high transfer position.
+- The optimization patches only the `bed_mesh` probe helper. Homing and other
+  probe users retain their normal Klipper behavior.
+- `FF_BED_MESH_STATUS` reports the standard path and configured dynamic-Z
+  safety values.
+- Generic Klipper `bed_mesh.py` and `probe.py` remain unmodified.
 
 ## `/usr/data/anvil/klipper/klippy/extras/ff_extruder.py`
 
