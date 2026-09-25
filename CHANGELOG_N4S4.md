@@ -1,6 +1,6 @@
 # Creator 5 N4S4 – Change Log
 
-Last updated: 2026-09-24
+Last updated: 2026-09-25
 
 This document describes the local changes compared with the original
 FlashForge/Klipper4FlashForge implementation. All printer paths are relative
@@ -189,6 +189,22 @@ preserved.
   assumed 28 x 28 mm square.
 
 ## `/usr/data/anvil-data/config/printer_n4s4.cfg`
+
+### Automatic include installer
+
+- The `anvil-klipper-config` package installs
+  `10-enable-printer-n4s4.sh` directly as
+  `/usr/data/anvil-data/scripts/10-enable-printer-n4s4.sh`; no SSH session or
+  manual edit of `printer.cfg` is required.
+- On boot it adds `[include printer_n4s4.cfg]` immediately before the
+  `SAVE_CONFIG` area, or before the existing `# Save Mesh Data #` heading.
+- The operation is idempotent, removes duplicate active N4S4 includes while
+  relocating them, validates the generated file, and creates a timestamped
+  backup only when a change is required.
+- Once the exact include is present, subsequent boots terminate immediately
+  without writing script output to the custom-script log.
+- The script refuses to modify `printer.cfg` if either it or the packaged
+  `printer_n4s4.cfg` is missing.
 
 ### Current tool-change values
 

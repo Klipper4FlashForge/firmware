@@ -182,6 +182,11 @@ TOOLCHANGE_SET_MATERIAL_OFFSET VALUE=0.000
 - `/usr/data/anvil-data/config/printer_n4s4.cfg`
 - `/usr/data/anvil-data/config/timelapse.cfg`
 - `/usr/data/anvil-data/config/printer.cfg`
+- `/usr/data/anvil-data/scripts/10-enable-printer-n4s4.sh`
+- `pkgs/klipper-config/build.sh`
+- `pkgs/klipper-config/control/postinst`
+- `qa/static/test_n4s4_include_installer.py`
+- `qa/replica/test_custom_scripts.py`
 - `CHANGELOG_N4S4.md`
 - `ORCA_MACHINE_AND_FILAMENT_SETTINGS.md`
 - `PR_DESCRIPTION_N4S4.md`
@@ -196,6 +201,19 @@ immediately before the `SAVE_CONFIG` block:
 ```cfg
 [include printer_n4s4.cfg]
 ```
+
+The `anvil-klipper-config` package automatically installs its BusyBox-compatible
+boot hook as:
+
+```text
+/usr/data/anvil-data/scripts/10-enable-printer-n4s4.sh
+```
+
+The script runs during boot, verifies that both configuration files exist,
+inserts the include before Klipper's `SAVE_CONFIG` area, and creates a backup
+only when it changes the file. No SSH installation step is required. Once the
+exact include exists, repeated boots exit immediately without adding script
+output to the log.
 
 The OrcaSlicer document contains the complete machine start G-code,
 build-plate name mapping, adaptive-mesh controls, and per-filament material
