@@ -21,24 +21,32 @@
 #
 # Everything derived is also published in get_status as printer.ff_print.*.
 #
-# Only the head of the file is read, and only what the file states in its own
-# commands -- as the app's own parser did:
+# The command metadata comes from the head of the file. A bounded tail read is
+# additionally used for Orca's resolved prime-tower settings:
 #   bed          the first `M140`/`M190 S<t>`
 #   nozzle       the first `M104`/`M109 S<t>`
 #   first tool   the first bare `Tn` -- the file's initial extruder, NOT the
 #                lowest-numbered one it uses
+#   tools        all tools named by Orca's `; filament:` header (1-based in
+#                that header), with a full-file bare-Tn scan as fallback
 #   layer        the first `;HEIGHT:` -- the FIRST layer's height, which is
 #                what the print Z offset's thin-layer term wants
+#   prime tower  Orca's single resolved wipe_tower_x/y plus width/brim/rotation
+#                values. In a multi-plate project the start-G-code placeholder
+#                may incorrectly expand to the first value of a comma-separated
+#                list instead of the active plate's single resolved value.
 #
-# Nothing is read from the slicer's config block: that keeps this
-# slicer-agnostic and avoids reading the far end of a 27 MB file. It is also
-# unreliable -- on a real file `; first_layer_bed_temperature` read 55 where
-# `M140` said 80.
+# Temperatures and tools are not read from the slicer's config block: those
+# values can differ from the commands actually emitted. The sole exception is
+# Orca's resolved prime-tower geometry. Its exact single-value entries are
+# needed because a custom start-G-code placeholder can incorrectly expand to
+# another plate's entry from a comma-separated multi-plate value.
 #
 # Per-tool clean temperatures are NOT taken from the file; the app's material
 # table is ported as _FF_FILAMENT.temps, with the material per tool alongside.
 
 import logging
+import math
 import os
 import re
 
@@ -47,6 +55,7 @@ EXTRUDER_COUNT = 4
 # Bounded read: everything parsed sits within ~8 KB of the start on real
 # files, so this is a wide margin rather than a guess.
 HEAD_BYTES = 256 * 1024
+TAIL_BYTES = 256 * 1024
 
 # print_stats states that mean the job is over (as opposed to paused mid-print).
 FINISHED_STATES = ('complete', 'cancelled', 'error')
@@ -61,6 +70,10 @@ def _parse_metadata(path):
     try:
         with open(path, 'rb') as fh:
             head = fh.read(HEAD_BYTES).decode('utf-8', 'replace')
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - TAIL_BYTES), os.SEEK_SET)
+            tail = fh.read(TAIL_BYTES).decode('utf-8', 'replace')
     except Exception:
         logging.exception("ff_print: cannot read '%s'", path)
         return {}
@@ -83,6 +96,39 @@ def _parse_metadata(path):
     if tool_match is not None:
         metadata['tool'] = int(tool_match.group(1))
 
+    # Orca lists every used filament/tool in its compact header.  Values are
+    # one-based there (`; filament: 1,3` means T0 and T2).  This lets the
+    # print-start macro offer an "all used colours" purge without loading the
+    # complete G-code into memory.  Older/non-Orca files fall back to a
+    # streaming scan of bare Tn commands across the whole file.
+    tools = []
+    filament_match = re.search(r'^;\s*filament:\s*([0-9, ]+)\s*$',
+                               head, re.M | re.I)
+    if filament_match is not None:
+        for value in filament_match.group(1).split(','):
+            try:
+                tool = int(value.strip()) - 1
+            except ValueError:
+                continue
+            if 0 <= tool < EXTRUDER_COUNT and tool not in tools:
+                tools.append(tool)
+    if not tools:
+        try:
+            with open(path, 'rb') as fh:
+                for line in fh:
+                    match = re.match(br'^T([0-%d])\b'
+                                     % (EXTRUDER_COUNT - 1), line)
+                    if match is not None:
+                        tool = int(match.group(1))
+                        if tool not in tools:
+                            tools.append(tool)
+        except Exception:
+            logging.exception("ff_print: cannot scan tools in '%s'", path)
+    if metadata.get('tool') is not None and metadata['tool'] not in tools:
+        tools.insert(0, metadata['tool'])
+    if tools:
+        metadata['tools'] = tools
+
     # First-layer height, from the per-layer marker the slicer emits. This
     # feeds the print Z offset's thin-layer term, which is a FIRST-layer
     # correction.
@@ -92,6 +138,106 @@ def _parse_metadata(path):
             metadata['layer'] = float(layer_match.group(1))
         except ValueError:
             pass
+
+    # Orca writes both a single resolved value and, for multi-plate projects,
+    # a comma-separated list for wipe_tower_x/y. Match ONLY the single-value
+    # lines: those are the coordinates actually used by the generated moves.
+    # Reading the tail is bounded, so this does not load a large G-code file.
+    number = r'([-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))'
+
+    def resolved_float(option):
+        match = re.search(r'^;\s*%s\s*=\s*%s\s*$'
+                          % (re.escape(option), number), tail, re.M)
+        if match is None:
+            return None
+        try:
+            return float(match.group(1))
+        except ValueError:
+            return None
+
+    tower_options = (
+        ('prime_tower_x', 'wipe_tower_x'),
+        ('prime_tower_y', 'wipe_tower_y'),
+        ('prime_tower_width', 'prime_tower_width'),
+        ('prime_tower_brim', 'prime_tower_brim_width'),
+        ('prime_tower_rotation', 'wipe_tower_rotation_angle'),
+    )
+    for key, option in tower_options:
+        value = resolved_float(option)
+        if value is not None:
+            metadata[key] = value
+
+    # Orca exposes only prime_tower_width as a setting; the other dimension
+    # is generated from the required purge volume. Recover that real depth
+    # from the first core outline immediately preceding WIPE_TOWER_BRIM_START.
+    # Rotating every emitted point back into the tower's local frame keeps the
+    # calculation valid when wipe_tower_rotation_angle is non-zero.
+    brim_marker = head.find('; WIPE_TOWER_BRIM_START')
+    if brim_marker >= 0:
+        type_marker = head.rfind(';TYPE:Prime tower', 0, brim_marker)
+    else:
+        type_marker = -1
+    block = head[type_marker:brim_marker] if type_marker >= 0 else None
+    if block is None and metadata.get('prime_tower_x') is not None:
+        # A large first object can push the first tower outline beyond the
+        # bounded head buffer. Stream until the first brim instead of loading
+        # the whole file; each new TYPE marker replaces the candidate block.
+        try:
+            candidate = None
+            with open(path, 'rb') as fh:
+                for raw_line in fh:
+                    line = raw_line.decode('utf-8', 'replace')
+                    if ';TYPE:Prime tower' in line:
+                        candidate = [line]
+                    elif candidate is not None:
+                        if '; WIPE_TOWER_BRIM_START' in line:
+                            block = ''.join(candidate)
+                            break
+                        candidate.append(line)
+        except Exception:
+            logging.exception(
+                "ff_print: cannot scan prime-tower outline in '%s'", path)
+    if block is not None:
+        points = []
+        current_x = current_y = None
+        for line in block.splitlines():
+            if re.match(r'^G[01]\b', line) is None:
+                continue
+            x_match = re.search(r'\bX([-+0-9.]+)', line)
+            y_match = re.search(r'\bY([-+0-9.]+)', line)
+            if x_match is not None:
+                current_x = float(x_match.group(1))
+            if y_match is not None:
+                current_y = float(y_match.group(1))
+            if (x_match is not None or y_match is not None) and \
+                    current_x is not None and current_y is not None:
+                points.append((current_x, current_y))
+        if len(points) >= 4:
+            rotation = metadata.get('prime_tower_rotation', 0.)
+            angle = math.radians(rotation)
+            cos_a, sin_a = math.cos(angle), math.sin(angle)
+            local = [(cos_a * x + sin_a * y,
+                      -sin_a * x + cos_a * y) for x, y in points]
+            local_x = [point[0] for point in local]
+            local_y = [point[1] for point in local]
+            extent_x = max(local_x) - min(local_x)
+            extent_y = max(local_y) - min(local_y)
+            expected = metadata.get('prime_tower_width')
+            if expected is not None and \
+                    abs(extent_y - expected) < abs(extent_x - expected):
+                extent_x, extent_y = extent_y, extent_x
+            world_x = [point[0] for point in points]
+            world_y = [point[1] for point in points]
+            metadata['prime_tower_width'] = extent_x
+            metadata['prime_tower_depth'] = extent_y
+            metadata['prime_tower_center_x'] = (
+                min(world_x) + max(world_x)) / 2.
+            metadata['prime_tower_center_y'] = (
+                min(world_y) + max(world_y)) / 2.
+            metadata['prime_tower_core_min_x'] = min(world_x)
+            metadata['prime_tower_core_max_x'] = max(world_x)
+            metadata['prime_tower_core_min_y'] = min(world_y)
+            metadata['prime_tower_core_max_y'] = max(world_y)
 
     return metadata
 
@@ -149,9 +295,29 @@ class FFPrint:
             'origin': self.origin,
             'active': self.active,
             'tool': self.metadata.get('tool'),
+            'tools': self.metadata.get('tools', []),
             'nozzle': self.metadata.get('nozzle'),
             'bed': self.metadata.get('bed'),
             'layer': self.metadata.get('layer'),
+            'prime_tower_x': self.metadata.get('prime_tower_x'),
+            'prime_tower_y': self.metadata.get('prime_tower_y'),
+            'prime_tower_width': self.metadata.get('prime_tower_width'),
+            'prime_tower_depth': self.metadata.get('prime_tower_depth'),
+            'prime_tower_brim': self.metadata.get('prime_tower_brim'),
+            'prime_tower_rotation': self.metadata.get(
+                'prime_tower_rotation'),
+            'prime_tower_center_x': self.metadata.get(
+                'prime_tower_center_x'),
+            'prime_tower_center_y': self.metadata.get(
+                'prime_tower_center_y'),
+            'prime_tower_core_min_x': self.metadata.get(
+                'prime_tower_core_min_x'),
+            'prime_tower_core_max_x': self.metadata.get(
+                'prime_tower_core_max_x'),
+            'prime_tower_core_min_y': self.metadata.get(
+                'prime_tower_core_min_y'),
+            'prime_tower_core_max_y': self.metadata.get(
+                'prime_tower_core_max_y'),
         }
 
     def _resolve(self, gcmd, cmd):
@@ -187,6 +353,9 @@ class FFPrint:
                                ('layer', 'LAYER', '%s')):
             if self.metadata.get(key) is not None:
                 params.append('%s=%s' % (name, fmt % (self.metadata[key],)))
+        if self.metadata.get('tools'):
+            params.append('TOOLS=%s' % ','.join(
+                str(tool) for tool in self.metadata['tools']))
 
         # Let the macro raise: a refusal here must stop the print BEFORE the
         # base command loads and resumes the file.
