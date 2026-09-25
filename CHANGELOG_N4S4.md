@@ -333,6 +333,8 @@ in `ORCA_Z_OFFSETS.md`; that guide is not copied to the printer.
 - The package installs it as `/usr/data/anvil/config/timelapse.cfg`;
   `anvil-link-prog.sh` exposes it to Klipper through the existing
   `/usr/data/anvil-data/config/timelapse.cfg` symlink.
+- The package revision uses the firmware release stamp, ensuring that an
+  updated local macro file is recognized as an upgrade on existing printers.
 - Renamed the console/status macro from `GET_TIMELAPSE_SETUP` to
   `TIMELAPSE_SETUP_STATUS`. Its output and behavior are unchanged.
 - Disabled frame requests emit their ignored-frame message only once per
