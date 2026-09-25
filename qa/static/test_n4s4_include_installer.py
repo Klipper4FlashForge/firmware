@@ -14,7 +14,7 @@ SCRIPT = (
     / "10-enable-printer-n4s4.sh"
 )
 BUILD = ROOT / "pkgs" / "klipper-config" / "build.sh"
-POSTINST = ROOT / "pkgs" / "klipper-config" / "control" / "postinst"
+LINKER = ROOT / "pkgs" / "anvil-core" / "payload" / "bin" / "anvil-link-prog.sh"
 
 
 def _shell():
@@ -106,10 +106,10 @@ def test_missing_n4s4_config_leaves_printer_unchanged(tmp_path):
 
 def test_package_installs_the_hook_in_the_persistent_boot_directory():
     build = BUILD.read_text(encoding="utf-8")
-    postinst = POSTINST.read_text(encoding="utf-8")
+    linker = LINKER.read_text(encoding="utf-8")
 
     assert 'pkg_stage "$PKG_DIR/payload/scripts" "share/klipper-config"' in build
     assert 'pkg_ship "config" "share/klipper-config"' in build
-    assert "scripts_dir=/usr/data/anvil-data/scripts" in postinst
-    assert 'target="$scripts_dir/10-enable-printer-n4s4.sh"' in postinst
-    assert 'chmod 0644 "$tmp"' in postinst
+    assert "_n4s4_dir=/usr/data/anvil-data/scripts" in linker
+    assert '_n4s4_dst="$_n4s4_dir/10-enable-printer-n4s4.sh"' in linker
+    assert 'chmod 0644 "$_n4s4_tmp"' in linker

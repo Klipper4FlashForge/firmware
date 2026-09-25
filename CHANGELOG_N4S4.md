@@ -196,6 +196,9 @@ preserved.
   `10-enable-printer-n4s4.sh` directly as
   `/usr/data/anvil-data/scripts/10-enable-printer-n4s4.sh`; no SSH session or
   manual edit of `printer.cfg` is required.
+- `anvil-link-prog.sh` performs that atomic copy after a firmware payload is
+  extracted as well as during package updates, because the persistent
+  `anvil-data` directory itself is intentionally outside `anvil.tar.xz`.
 - On boot it adds `[include printer_n4s4.cfg]` immediately before the
   `SAVE_CONFIG` area, or before the existing `# Save Mesh Data #` heading.
 - The operation is idempotent, removes duplicate active N4S4 includes while

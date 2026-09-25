@@ -262,9 +262,7 @@ restore_stock_chelper
 # ONCE, and never again: after this, $CONFIG_DIR is the live config and
 # $STOCK_CONFIG is left as the machine had it, untouched from here on.
 # Re-seeding would overwrite an owner's printer.cfg with a stale one on every
-# update. The one migration below removes FlashForge's DC24V_CTL output_pin;
-# printer.base.cfg now owns that hardware as a heater_fan, and leaving both
-# definitions would make Klipper refuse the duplicate eheaterboard:PA3 pin.
+# update.
 #
 # The mod's own .cfg files are NOT copied: they are symlinked in below, so an
 # `apk upgrade` changes what Klipper reads without going near this directory.
@@ -311,14 +309,6 @@ if [ ! -f "$CONFIG_DIR/printer.cfg" ]; then
 fi
 mkdir -p "$CONFIG_DIR"
 
-# FlashForge 1.9.9 may have written [output_pin DC24V_CTL] into the live file.
-# printer.base.cfg now owns PA3 as a heater_fan, so remove the obsolete section
-# before Klipper sees two objects claiming the same pin.
-if [ -f "$MODDIR/bin/anvil-migrate-printer-config.sh" ]; then
-    /bin/sh "$MODDIR/bin/anvil-migrate-printer-config.sh" \
-        "$CONFIG_DIR/printer.cfg"
-fi
-
 # Klipper resolves [include] against the directory of the file doing the
 # including -- configfile.py: `dirname = os.path.dirname(source_filename)`,
 # the path as opened, NOT the resolved target. So a symlinked printer.base.cfg
@@ -356,6 +346,29 @@ case "$MACHINE" in
         echo "link-prog: !! MACHINE='$MACHINE' is not a model I ship a chamber config for" >&2
         echo "link-prog:    leaving $CONFIG_DIR/printer.chamber.cfg as it is" >&2 ;;
 esac
+
+# N4S4's include installer must live in the persistent boot-script directory,
+# which is outside MODDIR and therefore cannot be carried directly inside
+# anvil.tar.xz. This linking pass runs both after a firmware payload is
+# extracted on the printer and from the klipper-config package postinst.
+# Install the current packaged copy atomically and stay quiet when it already
+# matches, preserving the small boot/install log footprint.
+_n4s4_src="$MODDIR/share/klipper-config/10-enable-printer-n4s4.sh"
+_n4s4_dir=/usr/data/anvil-data/scripts
+_n4s4_dst="$_n4s4_dir/10-enable-printer-n4s4.sh"
+if [ -f "$_n4s4_src" ]; then
+    if [ ! -f "$_n4s4_dst" ] || ! cmp -s "$_n4s4_src" "$_n4s4_dst"; then
+        mkdir -p "$_n4s4_dir"
+        _n4s4_tmp="$_n4s4_dst.anvil-new.$$"
+        if cp "$_n4s4_src" "$_n4s4_tmp" && chmod 0644 "$_n4s4_tmp" &&
+                mv -f "$_n4s4_tmp" "$_n4s4_dst"; then
+            echo "link-prog: installed $_n4s4_dst"
+        else
+            rm -f "$_n4s4_tmp"
+            echo "link-prog: !! could not install $_n4s4_dst" >&2
+        fi
+    fi
+fi
 
 # WHAT AN OLDER RELEASE LEFT IN $STOCK_CONFIG STAYS THERE. Those releases
 # symlinked printer.base.cfg and the ff-*.cfg into FlashForge's directory,

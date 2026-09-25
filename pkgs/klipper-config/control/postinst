@@ -22,22 +22,4 @@ if [ -x "$MODDIR/bin/anvil-link-prog.sh" ]; then
     "$MODDIR/bin/anvil-link-prog.sh"
 fi
 
-# This is a package-managed boot hook, not an action the owner must perform
-# over SSH. Keep its source below MODDIR so apk owns it, then install an
-# atomic copy into the persistent custom-script directory that the boot runner
-# reads. It is deliberately non-executable: run-scripts.sh invokes it through
-# the printer's BusyBox /bin/sh.
-source="$MODDIR/share/klipper-config/10-enable-printer-n4s4.sh"
-scripts_dir=/usr/data/anvil-data/scripts
-target="$scripts_dir/10-enable-printer-n4s4.sh"
-if [ -f "$source" ]; then
-    mkdir -p "$scripts_dir"
-    tmp="$target.tmp.$$"
-    trap 'rm -f "$tmp"' EXIT HUP INT TERM
-    cp "$source" "$tmp"
-    chmod 0644 "$tmp"
-    mv -f "$tmp" "$target"
-    trap - EXIT HUP INT TERM
-fi
-
 exit 0
