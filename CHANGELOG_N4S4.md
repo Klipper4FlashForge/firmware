@@ -293,10 +293,11 @@ restore_unretract_feed: 200
   right again at the purge chute or front wipe point. Its paused-print path
   remains restricted to the already mounted tool.
 - Automatic pre-print cleaning uses its own `park_retract` of 0.4 mm instead
-  of the stock 5 mm manual-purge retract. This prevents every tool cleaned by
+  of the stock 5 mm purge retract. This prevents every tool cleaned by
   `START_PURGE_SET MODE=ALL` from carrying an unrecovered 5 mm filament deficit
-  into a no-prime-tower job. The public manual `PURGE` macro retains the stock
-  5 mm retract.
+  into a no-prime-tower job. The public manual `PURGE` macro uses the same
+  value by default and accepts `RETRACT=<0..10>` when a different maintenance
+  retract is deliberately required.
 - `_NS_BEFORE_PRINT` keeps the stock print lifecycle intact while
   applying that mode. `ALL` sends every used tool through the rear-right
   purge-and-wipe sequence; `FIRST` cleans only the initial tool; `OFF` skips
