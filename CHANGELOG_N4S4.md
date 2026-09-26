@@ -308,6 +308,11 @@ restore_unretract_feed: 200
   to the next object. Start-purge tool selections use `RESTORE_AXIS=` and do
   not arm this post-heat prime; jobs with a registered prime tower retain the
   existing tower recovery path.
+- Before leaving that chute, the recovery macro retracts 0.4 mm, withdraws to
+  X250, and travels straight down the clear right-hand corridor to Y0. It then
+  restores the same 0.4 mm before handing control back to Orca. This prevents
+  a diagonal string across an already printed object without carrying an
+  extrusion deficit into the next perimeter.
 - `_NS_BEFORE_PRINT` keeps the stock print lifecycle intact while
   applying that mode. `ALL` sends every used tool through the rear-right
   purge-and-wipe sequence; `FIRST` cleans only the initial tool; `OFF` skips
