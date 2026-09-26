@@ -311,14 +311,12 @@ restore_unretract_feed: 200
   marks all tools as prepared, disabling every in-print chute purge. Start-
   purge tool selections use `RESTORE_AXIS=` and do not arm the hook; jobs with
   a registered prime tower retain the existing tower recovery path.
-- Before leaving that chute, the recovery macro retracts 0.4 mm, withdraws to
-  X250, and travels straight down the clear right-hand corridor to Y0. It then
-  restores the same 0.4 mm before handing control back to Orca. This prevents
-  a diagonal string across an already printed object without carrying an
-  extrusion deficit into the next perimeter.
-- Reused tools still take the non-extruding `X250 -> Y0` corridor after a
-  change, so suppressing repeated purges does not reintroduce diagonal travel
-  across the printed parts.
+- Before leaving that chute, the recovery macro retracts 0.4 mm and withdraws
+  straight to X250. It then restores the same 0.4 mm before handing control
+  directly back to Orca. This breaks the purge string without carrying an
+  extrusion deficit into the next perimeter or adding a detour through Y0.
+- Reused tools perform no additional recovery-macro movement. After the normal
+  raised tool change at X250, Orca travels directly to its next print position.
 - `_NS_BEFORE_PRINT` keeps the stock print lifecycle intact while
   applying that mode. `ALL` sends every used tool through the rear-right
   purge-and-wipe sequence; `FIRST` cleans only the initial tool; `OFF` skips
