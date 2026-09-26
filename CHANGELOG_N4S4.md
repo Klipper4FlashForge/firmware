@@ -234,6 +234,7 @@ preserved.
 
 ```ini
 [ff_toolchange]
+grab_retreat_feed: 4800
 restore_axis: xy
 restore_feed: 30000
 restore_z_hop: 2.0
@@ -253,6 +254,9 @@ restore_unretract_feed: 200
   that captured point. The new tool remains raised and retracted for Orca's
   following travel to the prime tower.
 - Z-hop: 2 mm at 20 mm/s.
+- After the initial 20 mm dock pullback, the grabbed tool retreats to the safe
+  X position at 80 mm/s (`grab_retreat_feed: 4800`). This matches the tested
+  release-retreat speed and replaces the previous 25 mm/s default.
 - In-dock retract: 0.4 mm at 30 mm/s.
 - The Z-hop and in-dock retract remain active when restoration is suppressed.
   The configured 0.4 mm slow recovery is performed only when the captured
