@@ -217,7 +217,7 @@ restore_axis: xy
 restore_feed: 30000
 restore_z_hop: 2.0
 restore_z_feed: 1200
-restore_retract: 2.0
+restore_retract: 0.4
 restore_retract_feed: 1800
 restore_unretract: 0.4
 restore_unretract_feed: 200
@@ -232,7 +232,7 @@ restore_unretract_feed: 200
   that captured point. The new tool remains raised and retracted for Orca's
   following travel to the prime tower.
 - Z-hop: 2 mm at 20 mm/s.
-- In-dock retract: 2 mm at 30 mm/s.
+- In-dock retract: 0.4 mm at 30 mm/s.
 - The Z-hop and in-dock retract remain active when restoration is suppressed.
   The configured 0.4 mm slow recovery is performed only when the captured
   position is inside the prime tower; outside it, pressure is recovered by
@@ -292,6 +292,11 @@ restore_unretract_feed: 200
   each tool fully to X250, travel along that safe X corridor, and only move
   right again at the purge chute or front wipe point. Its paused-print path
   remains restricted to the already mounted tool.
+- Automatic pre-print cleaning uses its own `park_retract` of 0.4 mm instead
+  of the stock 5 mm manual-purge retract. This prevents every tool cleaned by
+  `START_PURGE_SET MODE=ALL` from carrying an unrecovered 5 mm filament deficit
+  into a no-prime-tower job. The public manual `PURGE` macro retains the stock
+  5 mm retract.
 - `_NS_BEFORE_PRINT` keeps the stock print lifecycle intact while
   applying that mode. `ALL` sends every used tool through the rear-right
   purge-and-wipe sequence; `FIRST` cleans only the initial tool; `OFF` skips
