@@ -5,9 +5,9 @@
       "name": "FlashForge Creator 5 Pro",
       "manufacturer": "FlashForge",
       "image": "generic-corexy.png",
-      "ams_type": "tool_changer",
+      "ams_type": "afc",
       "z_offset_calibration_strategy": "firmware_managed",
-      "notes": "4-tool toolchanger driven by the ff_toolchange Klipper extra (github: creator5-custom-firmware). It registers the toolchanger and tool T0..T3 objects itself; per-tool Z is managed by TOOL_Z_ADJUST and the print-start offset by TOOLCHANGE_SET_PRINT_OFFSET, so HelixScreen's probe-based Z-offset flow does not apply. Distinguished from the non-Pro only by the chamber heater: the two machines are otherwise the same hardware, and the stock firmwareExe builds differ in nothing else.",
+      "notes": "4-tool toolchanger driven by the ff_toolchange Klipper extra (github: creator5-custom-firmware), with AFC on top as one Toolchanger unit of four standalone lanes (e0..e3): AFC owns T0..T3, tool mapping, infinite spool and per-tool Spoolman spools, so HelixScreen runs its AFC backend. ff_toolchange registers the toolchanger and tool T0..T3 objects itself; per-tool Z is managed by TOOL_Z_ADJUST and the print-start offset by TOOLCHANGE_SET_PRINT_OFFSET, so HelixScreen's probe-based Z-offset flow does not apply. Distinguished from the non-Pro only by the chamber heater: the two machines are otherwise the same hardware, and the stock firmwareExe builds differ in nothing else.",
       "heuristics": [
         {
           "type": "object_exists",
@@ -51,7 +51,7 @@
       "name": "FlashForge Creator 5",
       "manufacturer": "FlashForge",
       "image": "generic-corexy.png",
-      "ams_type": "tool_changer",
+      "ams_type": "afc",
       "z_offset_calibration_strategy": "firmware_managed",
       "notes": "The plain Creator 5: same 4-tool toolchanger as the Pro, but no chamber heating element. Its printer.chamber.cfg declares [temperature_sensor chamber] where the Pro declares [heater_generic chamber_heater], so the chamber temperature still reads and nothing can command heat. The two entries are identical apart from that one heuristic, which is what separates them.",
       "heuristics": [

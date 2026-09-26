@@ -75,6 +75,7 @@ nav:
       - Installing: installing.md
       - Feature list: features.md
       - Your first print: first-print.md
+      - Filament and spools: filament-and-spools.md
       - Calibration:
           - Read first: calibration-overview.md
           - XYZ tool calibration: calibration.md

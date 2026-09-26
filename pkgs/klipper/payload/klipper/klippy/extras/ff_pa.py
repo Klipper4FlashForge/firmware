@@ -745,7 +745,7 @@ class FFPA:
                 pass
         self.parked_at = None
 
-    def _heat(self, gcmd, tool, extruder):
+    def _heat(self, gcmd, extruder):
         """Heat for TEMP= and return the target to put back afterwards.
 
         None when TEMP= was not given: a heater the operator set by hand is
@@ -757,17 +757,21 @@ class FFPA:
         if temp is None:
             return None
         prev = extruder.get_status(self.reactor.monotonic()).get('target', 0.)
-        self._run('M104 S%.1f T%d' % (temp, tool))
+        # By heater name: M104 T<n> is AFC's (ff-afc.cfg) and heats whichever
+        # head T<n> is mapped to, not physical tool n.
+        self._run('SET_HEATER_TEMPERATURE HEATER=%s TARGET=%.1f'
+                  % (extruder.get_name(), temp))
         self._run('TEMPERATURE_WAIT SENSOR=%s MINIMUM=%.1f MAXIMUM=%.1f'
                   % (extruder.get_name(), temp - self.min_temp_margin,
                      temp + self.min_temp_margin))
         return prev
 
-    def _restore_heat(self, tool, prev_target):
+    def _restore_heat(self, extruder, prev_target):
         if prev_target is None:
             return
         try:
-            self._run('M104 S%.1f T%d' % (prev_target, tool))
+            self._run('SET_HEATER_TEMPERATURE HEATER=%s TARGET=%.1f'
+                      % (extruder.get_name(), prev_target))
         except self.printer.command_error:
             pass
 
@@ -833,13 +837,13 @@ class FFPA:
         self._check_bounds(gcmd, tool)
         self._ensure_extruder(tool)
         extruder = self._extruder()
-        prev_target = self._heat(gcmd, tool, extruder)
+        prev_target = self._heat(gcmd, extruder)
         # From here every exit -- success, a failed sweep, a mid-run error --
         # must put the heater target back, or TEMP= leaves the hotend on.
         try:
             self._calibrate_heated(gcmd, verbose, tool)
         finally:
-            self._restore_heat(tool, prev_target)
+            self._restore_heat(extruder, prev_target)
 
     def _calibrate_heated(self, gcmd, verbose, tool):
         extruder = self._extruder()
@@ -967,11 +971,11 @@ class FFPA:
         self._check_bounds(gcmd, tool)
         self._ensure_extruder(tool)
         extruder = self._extruder()
-        prev_target = self._heat(gcmd, tool, extruder)
+        prev_target = self._heat(gcmd, extruder)
         try:
             self._probe_heated(gcmd, y, pa_text, tool)
         finally:
-            self._restore_heat(tool, prev_target)
+            self._restore_heat(extruder, prev_target)
 
     def _probe_heated(self, gcmd, y, pa_text, tool):
         extruder = self._extruder()

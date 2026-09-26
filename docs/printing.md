@@ -44,7 +44,7 @@ the file uses with its clean temperature (Orca: `is_extruder_used[n]`; a bare
 `TOOLS=0,2` also works and falls back to `NOZZLE=`) — presence gate and
 pre-print
 nozzle clean; without explicit temperatures each tool is cleaned at the
-temperature its `_FF_FILAMENT.tool_material` maps to; `CLEAN=0` skips the clean (default on: each used tool is grabbed,
+temperature AFC records for its head, else `NOZZLE=`; `CLEAN=0` skips the clean (default on: each used tool is grabbed,
 heated, purged 50 mm at the chute with the part fan on, wiped at the
 station, cooled by 100 °C and docked while the bed heats — the app's
 `clearNozzlePrint`); `LEVEL=1` probes a fresh mesh (recommended for the
@@ -139,9 +139,9 @@ touchscreen app did the rest (polled the mounted channel's switch sensor
 from its print loop, kept only the mounted tool's motion sensor enabled).
 Without the app nothing would happen. `payload/klipper/config/ff-runout.cfg` restates the
 sensor sections (Klipper merges repeated sections, later options win — the
-stock `printer.filament.cfg` stays untouched and OTA-safe) so that
-`runout_gcode` calls `_FF_RUNOUT`, and `ff_toolchange` arms the mounted
-tool's two sensors on every grab, disarms everything on release, and
+stock `printer.filament.cfg` stays untouched and OTA-safe) so that the motion
+sensors' `runout_gcode` calls `_FF_RUNOUT`, and `ff_toolchange` arms the
+mounted tool's motion sensor on every grab, disarms everything on release, and
 re-arms on `RESUME` (the app's `setFilamentWheelManager`).
 
 Flow: sensor fires while an SD print is running and the sensor belongs to
@@ -160,6 +160,7 @@ here), so the head still holds that much printable filament when the print
 stops — it is lost. Printing on and pausing once that length has been
 extruded is a real improvement, but it needs a per-machine measurement and
 a watcher counting extrusion; it is not built in.
-No endless-spool: another tool is another head, not another spool of the
-same material. Untested on hardware: whether the motion sensors
+The presence switches are AFC's (`ff-afc.cfg`): a runout there swaps to the
+head `SET_RUNOUT` names, or pauses. See
+[Filament and spools](filament-and-spools.md). Untested on hardware: whether the motion sensors
 (`detection_length 50`, `event_delay 3`) stay quiet through `LOAD_FILAMENT`.

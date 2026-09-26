@@ -341,6 +341,18 @@ for _f in "$MODDIR"/config/*.cfg; do
     link_one "config/$(basename "$_f")" "$CONFIG_DIR/$(basename "$_f")"
 done
 
+# AFC's state (ff-afc.cfg's VarFile): lane maps, spools, runout lanes and
+# which lane each head holds, plus the values AFC saves for itself. It is the
+# owner's, like printer.cfg, so no package ships it -- an update must never
+# reset a map. AFC writes AFC.var.unit on its first save but its PREP reads it
+# before that, and reports a missing or EMPTY file as an error, so the first
+# boot gets an empty JSON object. Never overwritten once it has content.
+mkdir -p "$CONFIG_DIR/AFC"
+if [ ! -s "$CONFIG_DIR/AFC/AFC.var.unit" ]; then
+    printf '{}\n' > "$CONFIG_DIR/AFC/AFC.var.unit" \
+        || echo "link-prog: !! could not seed $CONFIG_DIR/AFC/AFC.var.unit" >&2
+fi
+
 # THE PRINTER SAYS WHICH MODEL IT IS, so nothing ships a marker: app_startup.sh
 # is FlashForge's own and carries MACHINE= at its top. It is restored by any
 # stock flash, so it stays right even when the payload is wrong.

@@ -43,6 +43,7 @@ mirrors that -- a section with no module is skipped, exactly as klippy skips
 it. What is asserted is the other half: where a module DOES exist, it must
 import, because klippy has no path that tolerates one that does not.
 """
+import glob
 import re
 
 import pytest
@@ -96,6 +97,12 @@ def _read_graph(box, path, config_dir, seen):
         spec = spec.strip()
         listing = box.sh("ls -1 %s/%s 2>/dev/null" % (config_dir, spec))
         names = [ln.strip() for ln in listing.out.splitlines() if ln.strip()]
+        if not names and glob.has_magic(spec):
+            # Klipper's own rule (configfile.py _resolve_include): an empty
+            # set is fine for a wildcard and fatal only for a named file.
+            # ff-afc.cfg's [include AFC/*.cfg] matches nothing until AFC
+            # first saves a value of its own.
+            continue
         if not names:
             pytest.fail(
                 "[include %s] in %s matches no file in %s -- Klipper treats "
@@ -231,6 +238,15 @@ PYEOF
         "absent, so this test passed without asking the question it exists "
         "for. Either klippy's tree no longer carries the module, or the "
         "config graph no longer names it.\n  %s" % "\n  ".join(lines))
+
+    # The same for AFC (anvil-afc): its extras land in anvil-klipper's tree
+    # from a second package, so a feed that dropped it would leave [AFC]
+    # sections with no module -- SKIPped here, fatal to klippy.
+    for name in ("AFC", "AFC_prep", "AFC_Toolchanger", "AFC_extruder"):
+        assert "OK %s" % name in lines, (
+            "%s was not imported -- ff-afc.cfg names it, so either anvil-afc "
+            "is not installed or the config graph lost ff-afc.cfg.\n  %s"
+            % (name, "\n  ".join(lines)))
 
     assert not failed, (
         "%d klippy extra(s) named by the shipped config do not import on %s. "

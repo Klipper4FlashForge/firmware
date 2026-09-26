@@ -87,8 +87,52 @@ them rather than repeated here:
 | [Your first print](first-print.md) | the go/no-go checks, calibration, and the two files under `gcode/` |
 | [Support](support.md) | the logs, and the way back to stock |
 
-What follows is the part that is ours rather than theirs: keeping those two
+What follows is the part that is ours rather than theirs: AFC, which the
+replica can install and import but not drive, and keeping those two
 verification files honest as the macros change.
+
+## AFC on hardware
+
+`ff-afc.cfg` puts AFC over the toolchanger. The replica proves its extras
+import on the printer's interpreter, that its gate sensors accept an edge
+through our `filament_switch_sensor.py`, and that `AFC/AFC.var.unit` is
+seeded; `qa/static` renders `START_PRINT` under a remap. Nothing below has
+run on a printer yet. In order, stopping at the first that fails:
+
+1. **Boot.** klippy reaches ready and the console shows AFC's PREP report
+   with four lanes, `e0`..`e3` on `T0`..`T3`, each `LOADED` if its head has
+   filament at the `fd_ex<n>` switch. `curl -s
+   'http://PRINTER:7125/printer/objects/query?AFC'` lists the lanes.
+2. **A toolchange through AFC.** From a homed, parked machine, `T2` grabs
+   the third head (AFC → `SELECT_TOOL T=2`), `TOOLCHANGE_STATUS` agrees, and
+   a `G1 Z0.2` puts the nozzle at the same height as before the migration.
+   `T2` again reports it already loaded and moves nothing; `UNSELECT_TOOL`
+   then `T2` grabs again. `SELECT_TOOL T=2` grabs without AFC.
+3. **A remap at print start.** `SET_MAP LANE=e2 MAP=T0`, then print a file
+   that starts on T0. The console says `AFC map: file tools [0] print on
+   heads [2]`, the third head is gated, cleaned, heated and printed with,
+   and the first layer sits right. `RESET_AFC_MAPPING` afterwards.
+4. **Infinite spool.** Same filament in heads 0 and 1,
+   `SET_RUNOUT LANE=e0 RUNOUT=e1`, then pull the filament out of head 0
+   mid-print. The print pauses, head 1 comes up to head 0's temperature,
+   the print resumes at the right place and height, and AFC's map now has
+   `e1` on T0.
+5. **Runout with no backup.** The same with `RUNOUT=NONE`: a pause, and
+   `LOAD_FILAMENT` then `RESUME` recovers.
+6. **A clog.** `fm_ex<n>` still pauses (`_FF_RUNOUT`), and only for the
+   mounted head.
+7. **Spoolman.** With `[spoolman]` in `moonraker-custom.conf`, give two heads
+   spools (`SET_SPOOL_ID`); a toolchange mid-print moves Moonraker's active
+   spool.
+8. **The screens.** Mainsail shows its AFC panel; HelixScreen shows the AFC
+   backend with four slots, and its tool-offset wizard still runs. OrcaSlicer's
+   device tab shows four trays, not eight.
+
+The risks worth watching while doing this: AFC makes blocking HTTP calls to
+Moonraker from inside klippy, and restores the toolhead position through
+`gcode_move`, while our tool offsets sit below it in `ff_toolchange`'s
+transform. Step 2's first-layer height and step 4's resume height are the
+checks for the second.
 
 ## Keeping the verification files honest
 

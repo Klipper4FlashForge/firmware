@@ -20,7 +20,7 @@ documented in the file headers.
 | File | Goes to (on the printer) | What it does |
 |---|---|---|
 | [`pkgs/klipper/payload/klipper/klippy/extras/ff_toolchange.py`](../pkgs/klipper/payload/klipper/klippy/extras/ff_toolchange.py) | `/usr/data/anvil/klipper/klippy/extras/` | The toolchanger: `T0..T3`, dock/grab state machine with sensor polling and retries, per-tool G-code offsets (the absolute ~3.2 mm bed-frame Z is applied at every grab), `TOOLCHANGE_SET_PRINT_OFFSET` (the print-start thermal/bed/layer Z terms), `TOOL_Z_ADJUST` (per-tool babystep, live, saved on request), `TOOLCHANGE_STATUS`, `TOOLCHANGE_PARK` |
-| [`pkgs/helixscreen/payload/helixscreen/config/printer_database.d/flashforge_creator5.json`](../pkgs/helixscreen/payload/helixscreen/config/printer_database.d/flashforge_creator5.json) | HelixScreen `config/printer_database.d/` | Printer-database entry so HelixScreen auto-detects both Creator 5 models as tool changers (the Pro and the non-Pro differ only by the chamber heater) |
+| [`pkgs/helixscreen/payload/helixscreen/config/printer_database.d/flashforge_creator5.json`](../pkgs/helixscreen/payload/helixscreen/config/printer_database.d/flashforge_creator5.json) | HelixScreen `config/printer_database.d/` | Printer-database entry so HelixScreen auto-detects both Creator 5 models (the Pro and the non-Pro differ only by the chamber heater); the AMS backend it runs is AFC's, chosen from the live objects |
 | [`pkgs/klipper/payload/klipper/klippy/extras/ff_print.py`](../pkgs/klipper/payload/klipper/klippy/extras/ff_print.py) | `/usr/data/anvil/klipper/klippy/extras/` | `[ff_print]` — takes over `SDCARD_PRINT_FILE` and `M23`, reads bed/nozzle/initial tool/first-layer height out of the file itself, and calls `FF_BEFORE_PRINT_START` before the file's first line and `FF_AFTER_PRINT_END` once the job leaves the printing state. Declared in `ff-print-macros.cfg`; holds no policy of its own |
 | [`pkgs/klipper/payload/klipper/klippy/extras/ff_tool.py`](../pkgs/klipper/payload/klipper/klippy/extras/ff_tool.py) | `/usr/data/anvil/klipper/klippy/extras/` | `[ff_tool n]` — one section per tool; `dock_x/dock_y`, `nozzle_x/y/z` and `z_adjust` are all autosaved (import or calibration + `SAVE_CONFIG`) |
 | [`pkgs/klipper/payload/klipper/klippy/extras/ff_tool_offset.py`](../pkgs/klipper/payload/klipper/klippy/extras/ff_tool_offset.py) | `/usr/data/anvil/klipper/klippy/extras/` | `TOOL_CALIBRATE_TOOL_OFFSET` / `TOOL_LOCATE_SENSOR` / `TOOL_OFFSET_STATUS` — the touchscreen's nozzle XY/Z offset calibration, recovered from the binary and reimplemented in Klipper |
@@ -32,7 +32,8 @@ documented in the file headers.
 | [`pkgs/anvil-core/payload/bin/ff-startup.py`](../pkgs/anvil-core/payload/bin/ff-startup.py) | `/usr/data/anvil/bin/` | Everything before HelixScreen. **Every boot** it hands the toolhead boards over from their bootloaders (calling `ff_mcu_bringup.py` directly — it owns when klippy opens the ports, so it owns doing this first), starts klipper, and waits for klipper + moonraker to be ready, naming the board or service holding things up and re-handing the boards over on each retry. It runs as two s6-rc oneshots (`mcu-bringup`, then `ff-startup`), and the UI depends on the second — starting the UI before that is what produces a screen reporting a disconnected printer with no clue which board is missing. **First boot only**, once that has happened, it sends `FF_IMPORT_FIRMWARE_CONFIG` and `SAVE_CONFIG` over the moonraker API and stamps `/usr/data/anvil/.firmware-config-imported`. Only a verified save stamps, so a slow boot retries. It always runs and always waits — the `MOD_STARTUP` and `MOD_IMPORT` switches went with `anvil.conf` |
 | [`pkgs/klipper-config/payload/config/ff-print-macros.cfg`](../pkgs/klipper-config/payload/config/ff-print-macros.cfg) | `/usr/data/anvil-data/config/` | `START_PRINT` / `END_PRINT` / `PAUSE` / `RESUME` / `CANCEL_PRINT`, reconstructed from the app's sequences, plus the `_FF_PREFLIGHT` calibration and tool-presence gate; declares `[ff_print]` and the `FF_BEFORE_PRINT_START` / `FF_AFTER_PRINT_END` entry points it calls |
 | [`pkgs/klipper-config/payload/config/ff-filament.cfg`](../pkgs/klipper-config/payload/config/ff-filament.cfg) | `/usr/data/anvil-data/config/` | `LOAD_FILAMENT` / `UNLOAD_FILAMENT` / `PURGE` — the touchscreen's filament-load sequence (grab tool, purge chute, feed) recovered from the binary; unload is a designed retract (the stock app has none) |
-| [`pkgs/klipper-config/payload/config/ff-runout.cfg`](../pkgs/klipper-config/payload/config/ff-runout.cfg) | `/usr/data/anvil-data/config/` | Runout / clog handling: gives the stock `fd_ex*` / `fm_ex*` sensors a `runout_gcode` that pauses a Mainsail print when the **mounted** tool runs out or clogs (the app's E0162 / E0163, reported here in plain words); `ff_toolchange` arms only the mounted tool's sensors |
+| [`pkgs/klipper-config/payload/config/ff-runout.cfg`](../pkgs/klipper-config/payload/config/ff-runout.cfg) | `/usr/data/anvil-data/config/` | Clog handling: gives the stock `fm_ex*` motion sensors a `runout_gcode` that pauses a Mainsail print when the **mounted** tool clogs (the app's E0163, reported here in plain words); `ff_toolchange` arms only the mounted tool's. The `fd_ex*` presence switches are AFC's (`ff-afc.cfg`) |
+| [`pkgs/klipper-config/payload/config/ff-afc.cfg`](../pkgs/klipper-config/payload/config/ff-afc.cfg) | `/usr/data/anvil-data/config/` | AFC over the toolchanger: one `[AFC_extruder e<n>]` standalone lane per head. AFC owns `T0..T3`, `M104`/`M109 T<n>`, `SET_MAP`, `SET_RUNOUT` (infinite spool on the `fd_ex*` pins, shared) and Spoolman's active spool; it reaches the changer through `SELECT_TOOL` / `UNSELECT_TOOL`. State lives in `AFC/` beside it, created by `anvil-link-prog.sh`. The extras are the `anvil-afc` package (`pkgs/afc`) |
 | [`pkgs/klipper-config/payload/config/printer.base.cfg`](../pkgs/klipper-config/payload/config/printer.base.cfg) | `$MODDIR/config/` -> symlinked to `/usr/data/anvil-data/config/printer.base.cfg` | FlashForge's `printer.base.cfg` with the chamber block replaced by `[include printer.chamber.cfg]`. Klipper can override an option but cannot un-declare a section, and the plain Creator 5 has no chamber heating element, so its heater must be **absent** rather than neutralised. `bin/unpack.sh` compares this against each stock package it unpacks and warns if FlashForge's has changed |
 | [`Creator5.cfg`](../pkgs/klipper-config/payload/config/chamber/Creator5.cfg) · [`Creator5Pro.cfg`](../pkgs/klipper-config/payload/config/chamber/Creator5Pro.cfg) | `$MODDIR/config/chamber/<Machine>.cfg` -> symlinked to `/usr/data/anvil-data/config/printer.chamber.cfg` | The one per-model difference: the Pro gets `[heater_generic chamber_heater]` + `[verify_heater]` verbatim from FlashForge, the Creator 5 gets only `[temperature_sensor chamber]` on the same pin. **Both ship in `anvil-klipper-config`** and `anvil-link-prog.sh` links whichever the printer asks for, reading `MACHINE=` out of FlashForge's own `app_startup.sh`. They used to be a package per model, which Conflicted — each owned `config/printer.chamber.cfg`, so the package manager refused the pair and the build had to choose. Nothing is edited at build time, and the payload is no longer model-specific |
 | [`pkgs/klipper-config/payload/config/ff-chamber.cfg`](../pkgs/klipper-config/payload/config/ff-chamber.cfg) | `/usr/data/anvil-data/config/` | `M141` / `M191` for the chamber heater (Klipper has neither, and the stock app drove the chamber only from its own UI), plus the gate: the macros ask Klipper whether `heater_generic chamber_heater` exists, so a non-zero chamber target is refused on a machine that does not declare one. Nothing to keep in sync; identical in every package |
@@ -321,10 +322,11 @@ for — `toolchanger` (`name`, `status`, `tool`, `tool_number`, `tool_numbers`,
 `tool_names`, `detected_tool`, `detected_tool_number`, `has_detection`) and
 `tool T0..T3` (`active`, `mounted`, `detect_state` = `mounted|absent` from the
 tool's grab sensor, `extruder`, `heater`, `fan`, `gcode_x/y/z_offset`) — and the
-commands they send: `SELECT_TOOL T=<n>` (= `T<n>`), `UNSELECT_TOOL [T=<n>]`
-(= `TOOLCHANGE_PARK`), `INITIALIZE_TOOLCHANGER` (state check, no motion),
-`SET_TOOL_TEMPERATURE [T=<n>] TARGET=<t> [WAIT=1]`,
-`VERIFY_TOOL_DETECTED [T=<n>] [ASYNC=…]` and `SELECT_TOOL_ERROR [MESSAGE=…]`.
+two commands AFC and HelixScreen send: `SELECT_TOOL T=<n>`, which grabs head
+*n* by its physical number, and `UNSELECT_TOOL [T=<n>]` (= `TOOLCHANGE_PARK`).
+`T<n>` itself is AFC's (see `ff-afc.cfg`). `SELECT_TOOL` on the head already
+mounted moves nothing and re-applies its offsets, which is the recovery after
+an aborted change.
 `status` is `changing` from before the first move of a **toolchange** until the
 sensors confirm the swap, `error` when the dock sensors disagree, else `ready`.
 A bare park (`TOOLCHANGE_PARK` / `UNSELECT_TOOL`) never sets it, so it reports
@@ -332,33 +334,22 @@ A bare park (`TOOLCHANGE_PARK` / `UNSELECT_TOOL`) never sets it, so it reports
 We keep no commanded tool state, so `detected_tool*` always equals `tool*`:
 both are derived from the dock and grab sensors.
 
-`SELECT_TOOL`, `UNSELECT_TOOL` and `TOOLCHANGE_PARK` accept upstream's
-`RESTORE_AXIS=<xyz>`: the G-code position is captured before the change and
-replayed after it, X/Y first and Z last so the nozzle is never dragged across
-the part. A G-code position is replayed, not a machine one, so it is read back
-through the offsets in force *after* the change — the new tool's nozzle lands
-where the old one was. The default is `restore_axis` in `[ff_toolchange]`,
-itself empty: nothing is restored unless asked, which is how this machine has
-always behaved. Restoring Z after an `UNSELECT_TOOL` is the sharp edge, since
-parking zeroes the tool offsets and the same G-code Z becomes a different
-machine Z (~3.2 mm, this tool's nozzle-to-station-trigger gap -- the station,
-not the eddy coil; see the note under Calibration).
-
-`SET_TOOL_TEMPERATURE` addresses the extruder behind the tool; `WAIT=1` waits
-only for heat-up, as Klipper's own `TEMPERATURE_WAIT MINIMUM` does.
-`VERIFY_TOOL_DETECTED` accepts `ASYNC` and ignores it — we read switches after
-a `wait_moves`, which costs nothing to do inline. `SELECT_TOOL_ERROR` aborts
-the running script; we hold no error latch to set, because status is derived
-from the sensors every time it is asked for.
-Upstream's docking-mode and tool-parameter commands (`TEST_TOOL_DOCKING`,
+No position is put back after a change: AFC saves the toolhead position
+before every change it drives and restores it after. Upstream's other commands
+(`INITIALIZE_TOOLCHANGER`, `SET_TOOL_TEMPERATURE`, `VERIFY_TOOL_DETECTED`,
+`SELECT_TOOL_ERROR`, `ASSIGN_TOOL`, `RESTORE_AXIS=`) are not implemented:
+only HelixScreen's tool-changer backend sent any of them, and with AFC present
+it runs the AFC backend instead. Its docking-mode and tool-parameter commands (`TEST_TOOL_DOCKING`,
 `ENTER_DOCKING_MODE`, `SET_TOOL_PARAMETER` and friends) are deliberately
 absent: calibration here is `TOOL_CALIBRATE_TOOL_OFFSET` /
 `TOOL_LOCATE_SENSOR` / `TOOL_Z_ADJUST`, already tied to the factory numbers.
-`ASSIGN_TOOL` is refused — remap tools in the slicer. Nothing to enable; it is
-always on. `part_fan` in `[ff_toolchange]` is what gets reported as each
+Nothing to enable; it is always on. `part_fan` in `[ff_toolchange]` is what gets reported as each
 tool's fan (shared `fan_generic fanM106` on this machine). `ff_toolchange`
 itself stays (the printer-database fingerprint keys on it); the new objects
-sit alongside.
+sit alongside. So do four `park_detector T<n>` objects with no status of
+their own: AFC asks each `[AFC_extruder]` whether its head is on the
+carriage through `get_park_detector_status()`, and without an answer it
+treats every head as mounted and a `T<n>` after a park grabs nothing.
 
 Verify from any machine that can reach Moonraker (port 7125):
 
@@ -377,16 +368,16 @@ goes `changing`, then `ready` with `tool_number: 0` and `tool T0`
 tool panel shows the mounted head and Park/Select per tool. The resonance
 commands are wrapped so they grab a head first (see [Input shaper](#input-shaper)).
 
-[HelixScreen](https://github.com/prestonbrown/helixscreen) then runs its Tool
-Changer backend: tool slots in the sidebar and print status, per-tool
-temperatures and offsets, Spoolman per tool, the plain single-extruder runout
-dialog. Drop `pkgs/helixscreen/payload/helixscreen/config/printer_database.d/flashforge_creator5.json` into HelixScreen's
-`config/printer_database.d/` for auto-detection (`ams_type: tool_changer`,
-`z_offset_calibration_strategy: firmware_managed`). Its default Load/Unload buttons only mount/unmount the tool (`SELECT_TOOL` /
-`UNSELECT_TOOL`); to actually feed or pull filament assign `LOAD_FILAMENT`,
-`UNLOAD_FILAMENT` and `PURGE` from [`pkgs/klipper-config/payload/config/ff-filament.cfg`](../pkgs/klipper-config/payload/config/ff-filament.cfg)
-in Settings → Macro Buttons — a user-assigned macro outranks the backend, and
-the parameter dialog picks up `TOOL` / `TEMP` / `PURGE_TEMP` from the macros.
+[HelixScreen](https://github.com/prestonbrown/helixscreen) sees both these
+objects and AFC's, and runs its AFC backend — a filament system outranks a
+bare tool changer in its discovery. The tool chips, per-tool temperatures and
+offsets still come from the objects above; slots, mapping, endless spool and
+Spoolman per head come from AFC. Its Load/Unload buttons go through AFC's
+`TOOL_LOAD` / `TOOL_UNLOAD`, which `ff-afc.cfg` points at `LOAD_FILAMENT` /
+`UNLOAD_FILAMENT` from [`pkgs/klipper-config/payload/config/ff-filament.cfg`](../pkgs/klipper-config/payload/config/ff-filament.cfg)
+(`_FF_AFC_LOAD` does nothing during a job, where `LOAD_FILAMENT` refuses to
+run). `pkgs/helixscreen/payload/helixscreen/config/printer_database.d/flashforge_creator5.json` identifies the machine
+(`ams_type: afc`, `z_offset_calibration_strategy: firmware_managed`).
 
 ## Reverse-engineering notes
 

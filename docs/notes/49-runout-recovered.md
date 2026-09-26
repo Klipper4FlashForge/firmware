@@ -72,13 +72,13 @@ The load pages (`FilamentLoad`, `LoadFilamentPrint`) never touch the sensors.
 
 ## Port
 
-`pkgs/klipper/payload/klipper/klippy/extras/ff_toolchange.py` (`[ff_toolchange] runout_switch_prefix: fd_ex`,
-`runout_motion_prefix: fm_ex`; empty or absent sections = that kind off, partial = config
-error):
+`pkgs/klipper/payload/klipper/klippy/extras/ff_toolchange.py` (`[ff_toolchange]
+runout_motion_prefix: fm_ex`; empty or absent sections = clog detection off, partial =
+config error). The presence switches are AFC's, not this port's -- see the last divergence:
 
 * grab verified → every sensor off, motion sensor of the new tool reset (the app's
   `RESET_FILAMENT_SENSOR` — a sensor that sat disabled while its extruder moved would fire
-  the moment it is enabled), then that tool's switch + motion sensor on. The app does this
+  the moment it is enabled), then that tool's motion sensor on. The app does this
   3 s later from a thread; here the grab moves are already complete. Same-tool re-select
   re-arms.
 * release (and so `TOOLCHANGE_PARK` / `UNSELECT_TOOL` / print end) → everything off,
@@ -90,23 +90,20 @@ error):
 `pkgs/klipper-config/payload/config/ff-runout.cfg` (include after `printer.base.cfg`; Klipper merges repeated sections,
 later options win — the stock `printer.filament.cfg` is left untouched):
 
-* the eight sections get `runout_gcode: _FF_RUNOUT TOOL=n KIND=switch|motion` and
-  `insert_gcode: _FF_INSERT …`, `pause_on_runout` stays `False`.
+* the four motion sections get `runout_gcode: _FF_RUNOUT TOOL=n` and an empty
+  `insert_gcode` (stock's prints `wheel insert:Tn` on every idle feed); `pause_on_runout`
+  stays `False`.
 * `_FF_RUNOUT`: ignores the event unless `print_stats.state == printing`, not paused, and
-  `TOOL` is `ff_toolchange.current_tool`; then `PAUSE`, `M117 T<n> clog` or
-  `M117 T<n> out of filament` (the app's E0162/E0163 codes are not emitted) and a console
-  line telling the user to `LOAD_FILAMENT TOOL=n` (its paused path is the app's in-print
-  feed: `E100`, `E-5`) and `RESUME`. `_FF_RUNOUT_CFG` `clog_pause` is the app's `plugCheck`
-  (0 = report a clog, don't pause); `switch_pause` has no app equivalent.
-* `_FF_INSERT`: a hint only (`LOAD_FILAMENT TOOL=n`, plus `RESUME` when paused on that
-  tool). Klipper fires insert events only while idle, so it never interrupts a print.
+  `TOOL` is `ff_toolchange.current_tool`; then `PAUSE`, `M117 T<n> clog` (the app's E0163
+  code is not emitted) and a console line telling the user to clear it and `RESUME`.
+  `_FF_RUNOUT_CFG` `clog_pause` is the app's `plugCheck` (0 = report a clog, don't pause).
 
 Divergences, deliberate:
 
-* switch sensors are also disabled for the non-mounted tools (the app polled them instead);
-  `filament_detected` keeps updating in the status regardless of `enabled`, so UIs still
-  show presence for all four.
-* no endless spool / `changeExtruderChannel` — another tool is another head.
+* no endless spool / `changeExtruderChannel` in this port. It came later, from AFC
+  (`ff-afc.cfg`): the presence switches' pins are shared with AFC's own sensors, AFC
+  owns their runout (a `SET_RUNOUT` backup head, or a pause), and this port arms and
+  handles the `fm_ex*` motion sensors alone.
 * the app re-arms the motion sensor after every resume (@0x7a0854). Nothing does that
   here unless `RESUME` calls `FF_RUNOUT_ARM` (recommended in `ff-print-macros.cfg`): after
   a clog pause the sensor only re-arms by itself once the encoder sees motion again.

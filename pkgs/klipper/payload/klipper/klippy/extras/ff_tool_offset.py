@@ -719,7 +719,9 @@ class FFToolOffset:
             # nozzle position ~3.2 mm out in the crash direction.
             carriage = self.toolchange.get_status(self.reactor.monotonic())
             if carriage.get('current_tool', -1) != tool:
-                self._run('T%d' % tool)
+                # SELECT_TOOL, not T<n>: T<n> is AFC's and grabs whichever
+                # head it is mapped to, and this has to measure tool n.
+                self._run('SELECT_TOOL T=%d' % tool)
                 self._wait_moves()
                 carriage = self.toolchange.get_status(self.reactor.monotonic())
                 if carriage.get('current_tool', -1) != tool \
@@ -762,8 +764,10 @@ class FFToolOffset:
             if save:
                 tool_object.set_nozzle(center_x, center_y, z_trigger)
 
-            # the app's exit block: heater off for the tool, Z15
-            self._run('M104 S0 T%d' % tool)
+            # the app's exit block: heater off for the tool, Z15. By heater
+            # name, since M104 T<n> follows AFC's map.
+            self._run('SET_HEATER_TEMPERATURE HEATER=%s TARGET=0'
+                      % tool_object.extruder_name)
             self._run('G1 Z%.3f F%d' % (self.z_final, FEED_PASS1))
             self._run('M400')
             if save:

@@ -6,7 +6,44 @@ both printer models or through every real-world workflow.
 
 ## Unreleased
 
-Nothing yet.
+### Added
+
+- AFC (the AFC-Klipper-Add-On) runs over the toolchanger, one lane per head.
+  `SET_MAP` prints any slicer tool number on any head and is remembered across
+  restarts; `SET_RUNOUT` names a backup head that takes over when a spool runs
+  out mid-print; `SET_SPOOL_ID` gives each head its own Spoolman spool, made
+  active whenever that head is picked up. Mainsail's AFC panel and
+  HelixScreen's AFC backend drive all three. Installs and loads in the
+  replica; not yet run on a printer. See
+  [Filament and spools](docs/filament-and-spools.md).
+
+### Changed
+
+- `T0`..`T3` and `M104`/`M109 T<n>` follow AFC's map. The print-start tool
+  check, calibration check and nozzle clean act on the heads the map picks.
+  `SELECT_TOOL T=<n>` still selects a head by its own number.
+- Filament load, unload and the pre-print nozzle clean take a head's
+  temperature from AFC's record of what is in it (its own temperature, else
+  the material table by its material). The fixed `tool_material` list is
+  gone; with no material recorded the clean falls back to the print's
+  `NOZZLE=` temperature instead of assuming PLA. AFC heats from the same
+  material table.
+- The presence switches' runout now belongs to AFC: a backup head, or a
+  pause. Clogs still pause through the motion sensors as before.
+
+### Removed
+
+- `INITIALIZE_TOOLCHANGER`, `SET_TOOL_TEMPERATURE`, `VERIFY_TOOL_DETECTED`,
+  `SELECT_TOOL_ERROR`, `ASSIGN_TOOL`, `TOOLCHANGE INDEX=` and the
+  `RESTORE_AXIS=` parameter. Nothing sends them with AFC present;
+  `SELECT_TOOL T=<n>` on the mounted head replaces `INITIALIZE_TOOLCHANGER`
+  as the recovery after an aborted change.
+
+### Fixed
+
+- HelixScreen's tool remap sent `ASSIGN_TOOL`, which this firmware refuses.
+  With AFC present HelixScreen runs its AFC backend, which remaps through
+  `SET_MAP` instead. Not yet confirmed on a printer.
 
 ## v20260827f-melitopol — 2026-09-24
 
