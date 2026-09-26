@@ -298,6 +298,13 @@ restore_unretract_feed: 200
   into a no-prime-tower job. The public manual `PURGE` macro uses the same
   value by default and accepts `RETRACT=<0..10>` when a different maintenance
   retract is deliberately required.
+- A real slicer tool change without a registered prime tower no longer returns
+  to the previous object's final XY position. It stays raised at the safe X250
+  corridor while Orca's following `M109` heats the new tool, then performs a
+  5 mm pressure-building extrusion in the rear-right chute before Orca travels
+  to the next object. Start-purge tool selections use `RESTORE_AXIS=` and do
+  not arm this post-heat prime; jobs with a registered prime tower retain the
+  existing tower recovery path.
 - `_NS_BEFORE_PRINT` keeps the stock print lifecycle intact while
   applying that mode. `ALL` sends every used tool through the rear-right
   purge-and-wipe sequence; `FIRST` cleans only the initial tool; `OFF` skips
