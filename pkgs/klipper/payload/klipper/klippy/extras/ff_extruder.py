@@ -17,7 +17,9 @@ small adapters during that window:
 * logical extruders consume, but hide, their repeated stepper options so only
   [extruder] creates the physical ExtruderStepper;
 * default SET_PRESSURE_ADVANCE falls back to that shared stepper after
-  verifying it is synchronized to the active logical extruder.
+  verifying it is synchronized to the active logical extruder;
+* an optional macro can run after the native M109 wait completes, without
+  replacing Klipper's built-in M109 command from printer.cfg.
 
 All generic motion, heater, trapq, and Pressure Advance implementation remains
 in the Klipper version shipped by Reforge.
@@ -53,6 +55,7 @@ _STEPPER_TRIGGER_OPTIONS = frozenset((
 _installed = False
 _active_printer = None
 _shared_extruder_name = None
+_post_m109_macro = None
 
 
 class _LogicalExtruderConfig:
@@ -76,9 +79,11 @@ class _LogicalExtruderConfig:
 class FFExtruder:
     def __init__(self, config):
         global _installed, _active_printer, _shared_extruder_name
+        global _post_m109_macro
 
         self.printer = config.get_printer()
         self.shared_extruder = config.get('shared_extruder', 'extruder')
+        self.post_m109_macro = config.get('post_m109_macro', '').strip()
 
         # This adapter must run before toolhead creates PrinterExtruder
         # instances.  Refuse a partial late installation instead of leaving a
@@ -98,6 +103,7 @@ class FFExtruder:
                     "only one [ff_extruder] section is allowed")
             _active_printer = self.printer
             _shared_extruder_name = self.shared_extruder
+            _post_m109_macro = self.post_m109_macro
             logging.info(
                 "ff_extruder: rebound shared-stepper adapter after restart; "
                 "owner=%s", self.shared_extruder)
@@ -116,8 +122,12 @@ class FFExtruder:
             raise config.error(
                 "[ff_extruder] incompatible Klipper: default Pressure "
                 "Advance handler missing")
+        if not hasattr(printer_extruder, 'cmd_M109'):
+            raise config.error(
+                "[ff_extruder] incompatible Klipper: M109 handler missing")
 
         original_printer_extruder_init = printer_extruder.__init__
+        original_m109 = printer_extruder.cmd_M109
         original_default_pressure_advance = (
             extruder_stepper.cmd_default_SET_PRESSURE_ADVANCE)
         def shared_printer_extruder_init(self, config, extruder_num):
@@ -156,11 +166,23 @@ class FFExtruder:
                     "extruder '%s'" % active.get_name())
             shared_stepper.cmd_SET_PRESSURE_ADVANCE(gcmd)
 
+        def shared_m109(self, gcmd):
+            # Preserve the firmware's native temperature selection and wait
+            # semantics.  The optional hook runs only after that wait has
+            # completed; its macro is responsible for being a no-op unless a
+            # tool change actually needs recovery priming.
+            original_m109(self, gcmd)
+            if _post_m109_macro:
+                self.printer.lookup_object('gcode').run_script_from_command(
+                    _post_m109_macro)
+
         printer_extruder.__init__ = shared_printer_extruder_init
+        printer_extruder.cmd_M109 = shared_m109
         extruder_stepper.cmd_default_SET_PRESSURE_ADVANCE = (
             shared_default_pressure_advance)
         _active_printer = self.printer
         _shared_extruder_name = self.shared_extruder
+        _post_m109_macro = self.post_m109_macro
         _installed = True
         logging.info(
             "ff_extruder: installed shared-stepper adapter; owner=%s",
