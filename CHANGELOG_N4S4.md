@@ -172,6 +172,10 @@ preserved.
   header. Older files fall back to a streaming scan of bare `Tn` commands.
 - The complete list is passed to the configured pre-print callback as
   `TOOLS=` and is also exposed as `printer.ff_print.tools`.
+- The parser also finds the second distinct selected tool and its first
+  `M109` target. These are exposed as `printer.ff_print.next_tool` and
+  `printer.ff_print.next_nozzle`, allowing startup to cover a first-change
+  preheat window that begins before Orca can place an object-body `M104`.
 
 ### Active prime-tower geometry
 
@@ -190,6 +194,20 @@ preserved.
   depth, centre, and world-coordinate bounds. For the two four-strip test
   files this correctly resolves a 28 x 14 mm core rather than the former
   assumed 28 x 28 mm square.
+
+## `/usr/data/anvil-data/config/ff-print-macros.cfg`
+
+### Deferred slicer mesh preparation
+
+- `START_PRINT` starts `M140` before its initial `G28`, so the bed heats while
+  XYZ homing and any configured start-purge operations run.
+- `DEFER_MESH=1` waits for the bed but leaves the final hot-bed Z home, mesh
+  probing/profile load, initial-tool pickup, and print-offset setup to the
+  sliced file's `ADAPTIVE_MESH` call.
+- The N4S4 print callback enables this mode, eliminating the previous sequence
+  which grabbed the initial tool, parked it again, and homed Z a third time.
+- The ordinary `START_PRINT` path remains unchanged for profiles which do not
+  use the N4S4 `ADAPTIVE_MESH` start block.
 
 ## `/usr/data/anvil-data/config/printer_n4s4.cfg`
 
@@ -311,10 +329,10 @@ restore_unretract_feed: 200
   marks all tools as prepared, disabling every in-print chute purge. Start-
   purge tool selections use `RESTORE_AXIS=` and do not arm the hook; jobs with
   a registered prime tower retain the existing tower recovery path.
-- Before leaving that chute, the recovery macro retracts 0.4 mm and withdraws
-  straight to X250. It then restores the same 0.4 mm before handing control
-  directly back to Orca. This breaks the purge string without carrying an
-  extrusion deficit into the next perimeter or adding a detour through Y0.
+- Before leaving that chute, the recovery macro retracts 0.4 mm and travels
+  to the front-right `X256 Y0` position. It then restores the same 0.4 mm
+  before handing control back to Orca, keeping any remaining ooze away from
+  already printed objects without carrying an extrusion deficit forward.
 - Reused tools perform no additional recovery-macro movement. After the normal
   raised tool change at X250, Orca travels directly to its next print position.
 - `_NS_BEFORE_PRINT` keeps the stock print lifecycle intact while
@@ -332,7 +350,9 @@ restore_unretract_feed: 200
     `MESH_DATA` profile according to the session toggle;
   - validates the symbolic build-plate code supplied by Orca;
   - picks up the requested tool afterward and applies the temperature-,
-    bed-, layer-, and build-plate-dependent print Z offset.
+    bed-, layer-, and build-plate-dependent print Z offset;
+  - starts heating the parsed second tool after probing, while Orca's normal
+    configured preheat-time commands remain responsible for later changes.
 - `DEFINE_PRIME_TOWER_OBJECT` registers Orca's actual generated prime-tower
   rectangle as an exclude object, ensuring that adaptive mesh generation
   includes the correct area. It prefers the active coordinates parsed by

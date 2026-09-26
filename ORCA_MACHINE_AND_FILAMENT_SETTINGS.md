@@ -40,14 +40,6 @@ DEFINE_PRIME_TOWER_OBJECT X=[wipe_tower_x] Y=[wipe_tower_y] WIDTH=[prime_tower_w
 
 
 ; ------------------------------------------------------------
-; Relieve nozzle pressure before the hot tool is parked for
-; Adaptive Bed Mesh.
-; ------------------------------------------------------------
-
-G1 E-5 F600
-M400
-
-; ------------------------------------------------------------
 ; Generate an adaptive mesh covering all normal print objects
 ; plus the registered Prime Tower.
 ; ------------------------------------------------------------
@@ -75,11 +67,10 @@ ADAPTIVE_MESH TOOL=[initial_extruder] NOZZLE=[nozzle_temperature_initial_layer] 
 {endif}
 
 ; ------------------------------------------------------------
-; Restore the initial print tool and wait for print temperature.
+; ADAPTIVE_MESH has selected the initial tool. Wait for its
+; print temperature.
 ; ------------------------------------------------------------
 
-G1 Z5 F2400
-T[initial_extruder]
 M109 S[nozzle_temperature_initial_layer] T[initial_extruder]
 
 ; ------------------------------------------------------------
@@ -91,6 +82,24 @@ PURGE_NEAR_OBJECT GAP=12 MARGIN=16 Z=0.2 E=25 F={filament_max_volumetric_speed[i
 
 ;start_gcode end
 ```
+
+The `G1 E-5` pressure-relief block used by older revisions must be removed.
+The deferred startup now leaves every tool parked until `ADAPTIVE_MESH` has
+completed, so there is no mounted nozzle pressure to relieve. Keeping that
+command could attempt a cold extrusion before a tool has been selected.
+
+The firmware reads the leading `M140` target before the file starts and begins
+bed heating before the initial `G28`. The normal startup callback deliberately
+defers its second Z home, mesh handling, initial-tool pickup, and print-offset
+setup to `ADAPTIVE_MESH`; this avoids homing and grabbing the same tool twice.
+
+Orca's **Printer settings > Multimaterial > Advanced > Preheat time** remains
+the source of normal in-print preheat scheduling. Orca emits an early `M104`
+when that lead time fits inside printable G-code. For the first change, the
+requested lead time can begin inside machine-start G-code; `ff_print.py`
+therefore identifies the second distinct tool and `ADAPTIVE_MESH` starts its
+heater immediately after probing. The later Orca-generated `M104` and `M109`
+commands remain authoritative and do not need to be changed.
 
 ### Prime Tower geometry
 
