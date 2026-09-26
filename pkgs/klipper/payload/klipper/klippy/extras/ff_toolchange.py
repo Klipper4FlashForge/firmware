@@ -14,8 +14,11 @@
 # current abnormal" is raised Klipper/MCU-side. Driving the same MOTOR_*
 # macros inherits that unchanged.
 
+# modified by N4S4
+
 import contextlib
 import logging
+import math
 
 EXTRUDER_COUNT = 4
 
@@ -191,6 +194,7 @@ class _ToolTransform:
                 self.toolchange.offset_z[tool] + self.toolchange.job_z)
 
     def move(self, newpos, speed):
+        assert self.next_transform is not None
         offsets = self._offsets()
         if offsets is None:
             return self.next_transform.move(newpos, speed)
@@ -199,6 +203,7 @@ class _ToolTransform:
              newpos[2] + offsets[2]] + list(newpos[3:]), speed)
 
     def get_position(self):
+        assert self.next_transform is not None
         base = self.next_transform.get_position()
         offsets = self._offsets()
         if offsets is None:
@@ -250,9 +255,12 @@ class FFToolchange:
         # later raised AttributeError at config parse on every calibrated
         # machine. Only INSTALLED at connect -- see _handle_connect.
         self.gcode_transform = _ToolTransform(self)
-        # Print-scoped Z, the job terms of TOOLCHANGE_SET_PRINT_OFFSET.
-        # Its own slot rather than a share of homing_origin, so that
-        # clearing one does not silently clear the other.
+        # Print-scoped Z has independent components so build-plate and
+        # filament tuning never overwrite tool calibration or the operator's
+        # babystep.  job_z is the sum consumed by the move transform.
+        self.print_base_z = 0.0
+        self.plate_z = 0.0
+        self.material_z = 0.0
         self.job_z = 0.0
         self.refresh_offsets()
         # True while a T<n>/TOOLCHANGE sequence is running (reported as
@@ -297,6 +305,35 @@ class FFToolchange:
         self.restore_axis = self._parse_axes(
             config.get('restore_axis', ''), config.error, 'restore_axis')
         self.restore_feed = config.getint('restore_feed', 9000, minval=1)
+        # Optional preparation of the travel after a real tool change.
+        # restore_axis may return to the position captured before T<n>.  With
+        # no restored axes, non-zero hop/retract values still protect the
+        # slicer's own subsequent travel: the new tool leaves its dock
+        # retracted and at the raised Z, and the slicer's explicit travel and
+        # layer-Z move take over.  All values default to zero so existing
+        # installations retain their behaviour.
+        self.restore_z_hop = config.getfloat(
+            'restore_z_hop', 0., minval=0.)
+        self.restore_z_feed = config.getint(
+            'restore_z_feed', 1200, minval=1)
+        self.restore_retract = config.getfloat(
+            'restore_retract', 0., minval=0.)
+        self.restore_retract_feed = config.getint(
+            'restore_retract_feed', 1800, minval=1)
+        # The return prime may deliberately be shorter and slower than the
+        # dock retract.  The remaining pressure deficit is then filled by
+        # the slicer's moving prime-tower extrusion instead of forming a
+        # stationary blob.  Defaults preserve the former balanced behaviour.
+        self.restore_unretract = config.getfloat(
+            'restore_unretract', self.restore_retract, minval=0.,
+            maxval=self.restore_retract)
+        self.restore_unretract_feed = config.getint(
+            'restore_unretract_feed', self.restore_retract_feed, minval=1)
+        # Optional hand-off used by the local no-prime-tower workflow.  The
+        # macro only marks the newly selected tool; Orca's following M109 then
+        # performs the hot chute prime at a safe position.
+        self.no_tower_prime_macro = config.get(
+            'no_tower_prime_macro', '').strip()
 
         # Sensor names.
         #  position buttons: one per tool, PRESSED == that tool is docked.
@@ -340,6 +377,10 @@ class FFToolchange:
         self.runout_switch = []     # full object names, resolved at connect
         self.runout_motion = []
         self.armed_tool = -1
+        # Set once per sliced job by DEFINE_PRIME_TOWER_OBJECT. It lets a
+        # bare T<n> distinguish "already on the tower" from "over the model,
+        # then travel to the tower" without looking ahead in virtual SD data.
+        self.prime_tower_geometry = None
 
         self.gcode.register_command(
             'TOOLCHANGE', self.cmd_TOOLCHANGE, desc=self.cmd_TOOLCHANGE_help)
@@ -347,7 +388,7 @@ class FFToolchange:
             self.gcode.register_command(
                 'T%d' % i, self._make_tn(i), desc="Select tool %d" % i)
         self.gcode.register_command(
-            'TOOLCHANGE_STATUS', self.cmd_TOOLCHANGE_STATUS,
+            'FF_TOOLCHANGE_STATUS', self.cmd_TOOLCHANGE_STATUS,
             desc=self.cmd_TOOLCHANGE_STATUS_help)
         self.gcode.register_command(
             'TOOLCHANGE_PARK', self.cmd_TOOLCHANGE_PARK,
@@ -355,6 +396,14 @@ class FFToolchange:
         self.gcode.register_command(
             'TOOLCHANGE_SET_PRINT_OFFSET', self.cmd_TOOLCHANGE_SET_PRINT_OFFSET,
             desc=self.cmd_TOOLCHANGE_SET_PRINT_OFFSET_help)
+        self.gcode.register_command(
+            'TOOLCHANGE_SET_MATERIAL_OFFSET',
+            self.cmd_TOOLCHANGE_SET_MATERIAL_OFFSET,
+            desc=self.cmd_TOOLCHANGE_SET_MATERIAL_OFFSET_help)
+        self.gcode.register_command(
+            'TOOLCHANGE_SET_PRIME_TOWER',
+            self.cmd_TOOLCHANGE_SET_PRIME_TOWER,
+            desc=self.cmd_TOOLCHANGE_SET_PRIME_TOWER_help)
         self.gcode.register_command(
             'TOOL_Z_ADJUST', self.cmd_TOOL_Z_ADJUST,
             desc=self.cmd_TOOL_Z_ADJUST_help)
@@ -759,6 +808,15 @@ class FFToolchange:
     def _extruder_name(self, tool):
         return self.tools[tool].extruder_name
 
+    def _sync_shared_extruder_stepper(self, tool):
+        extruder_name = self._extruder_name(tool)
+        self.gcode.respond_info(
+            "ff_toolchange: syncing shared extruder stepper -> %s"
+            % extruder_name)
+        self._run(
+            'SYNC_EXTRUDER_MOTION EXTRUDER=extruder MOTION_QUEUE=%s'
+            % extruder_name)
+
     def _current_max_accel(self):
         toolhead = self.printer.lookup_object('toolhead')
         return toolhead.get_status(self.reactor.monotonic())['max_accel']
@@ -782,7 +840,66 @@ class FFToolchange:
         gcode_move = self.printer.lookup_object('gcode_move')
         return list(gcode_move.get_status()['gcode_position'])
 
-    def _restore_position(self, axes, pos):
+    def _position_is_in_prime_tower(self, pos):
+        geometry = self.prime_tower_geometry
+        if geometry is None:
+            return False
+        cx, cy, hx, hy, cos_a, sin_a, _rotation = geometry
+        dx, dy = pos[0] - cx, pos[1] - cy
+        # Rotate the point back into the tower's local frame and test the
+        # real rectangle. This avoids treating nearby model geometry as tower
+        # merely because it lies in the larger rotation-safe mesh bounds.
+        local_x = cos_a * dx + sin_a * dy
+        local_y = -sin_a * dx + cos_a * dy
+        return abs(local_x) <= hx and abs(local_y) <= hy
+
+    def _retract_in_dock(self):
+        """Retract the newly locked tool before it leaves its dock.
+
+        The main lock macro is synchronous (STEPPER_LOCK ends in M400), so
+        the tool and its electrical contacts are seated when this is called.
+        Borrow relative-E mode without changing the slicer's E coordinate.
+        Return whether an unretract is owed at the restored position.
+        """
+        if self.restore_retract <= 0.:
+            return False
+        extruder = self.printer.lookup_object('toolhead').get_extruder()
+        eventtime = self.reactor.monotonic()
+        if not extruder.get_status(eventtime)['can_extrude']:
+            self.gcode.respond_info(
+                "ff_toolchange: in-dock retract skipped because the"
+                " mounted tool is below minimum extrusion temperature")
+            return False
+        self._run('SAVE_GCODE_STATE NAME=_ff_dock_retract')
+        try:
+            self._run('M83')
+            self._run('G1 E-%.3f F%d'
+                      % (self.restore_retract,
+                         self.restore_retract_feed))
+        finally:
+            self._run('RESTORE_GCODE_STATE NAME=_ff_dock_retract')
+        return True
+
+    def _raise_before_docking(self, pos):
+        """Raise the mounted nozzle before crossing the print toward a dock.
+
+        Keep the raised Z for the complete release/grab sequence.  The
+        matching descent happens in _restore_position only after the new
+        tool has returned to the captured X/Y position.
+        """
+        if self.restore_z_hop <= 0.:
+            return
+        self._run('SAVE_GCODE_STATE NAME=_ff_dock_zhop')
+        try:
+            self._run('G90')
+            self._run('G1 Z%.3f F%d'
+                      % (pos[2] + self.restore_z_hop,
+                         self.restore_z_feed))
+        finally:
+            self._run('RESTORE_GCODE_STATE NAME=_ff_dock_zhop')
+
+    def _restore_position(self, axes, pos, prepare_toolchange_travel=False,
+                          return_retracted=False):
         """Put the toolhead back where the change found it.
 
         A GCODE position is captured and replayed, not a machine one, so it
@@ -790,8 +907,10 @@ class FFToolchange:
         the new tool's nozzle goes where the old tool's nozzle was, which is
         the point of the parameter.
 
-        X/Y first and Z last: descending before the carriage is over the
-        target would drag the nozzle across the part.
+        With return-travel preparation enabled, the newly mounted hot tool
+        is retracted and raised before X/Y, then lowered and unretracted only
+        at the target.  Without it, this retains the original X/Y-first,
+        optional-Z-last behaviour.
 
         Restoring Z after a PARK is the one sharp edge. Parking zeroes the
         tool offsets, so the same G-code Z is a different machine Z -- by
@@ -802,13 +921,32 @@ class FFToolchange:
             return
         xy_move = ' '.join('%s%.3f' % (letter, pos[i])
                            for i, letter in enumerate('XY') if letter in axes)
+        prepare_travel = prepare_toolchange_travel and bool(xy_move)
+        do_zhop = prepare_travel and self.restore_z_hop > 0.
+        do_unretract = (prepare_travel and return_retracted
+                        and self.restore_unretract > 0.)
         # The sequence has already put the modal state back; borrow it and
         # return it rather than leaving G90 and the restore feed behind.
         self._run('SAVE_GCODE_STATE NAME=_ff_restore_axis')
         try:
             self._run('G90')
+            if do_zhop:
+                self._run('G1 Z%.3f F%d'
+                          % (pos[2] + self.restore_z_hop,
+                             self.restore_z_feed))
             if xy_move:
                 self._run('G1 %s F%d' % (xy_move, self.restore_feed))
+            if do_zhop:
+                self._run('G1 Z%.3f F%d'
+                          % (pos[2], self.restore_z_feed))
+            if do_unretract:
+                # The matching retract happened in the dock.  Use relative E
+                # locally; RESTORE_GCODE_STATE preserves the slicer's mode
+                # and logical E coordinate.
+                self._run('M83')
+                self._run('G1 E%.3f F%d'
+                          % (self.restore_unretract,
+                             self.restore_unretract_feed))
             if 'Z' in axes:
                 self._run('G1 Z%.3f F%d' % (pos[2], self.restore_feed))
         finally:
@@ -862,9 +1000,10 @@ class FFToolchange:
 
     # ---------------- grab ----------------
 
-    def _grab(self, tool):
+    def _grab(self, tool, retract_in_dock=False):
         """Port of CommMgr::doGrabExtruderLatest @0x7a8190."""
         dock_x, dock_y = self._dock(tool)
+        return_retracted = False
 
         # Precheck: the target must be detected in its dock (20 x 50 ms).
         # No motion at all on failure.
@@ -902,6 +1041,15 @@ class FFToolchange:
 
                 if self._poll_until(self._grab_sensor, SEAT_TIMEOUT):
                     self._run(self.grab_macro)
+                    if retract_in_dock:
+                        # The synchronous main lock has completed and the
+                        # tool is still at dock_x.  Select its heater/motion
+                        # queue before touching E, then retract before the
+                        # first pullback move can draw an ooze string.
+                        self._run('ACTIVATE_EXTRUDER EXTRUDER=%s'
+                                  % self._extruder_name(tool))
+                        self._sync_shared_extruder_stepper(tool)
+                        return_retracted = self._retract_in_dock()
                     # The pullback feed is the app's literal F4800
                     # (@0x7a9074), NOT the calibrated slow feed.
                     self._run('G1 X%.3f F%d'
@@ -943,11 +1091,13 @@ class FFToolchange:
             # approach accel, not at the restored limit.
             self._run('ACTIVATE_EXTRUDER EXTRUDER=%s'
                       % self._extruder_name(tool))
+            self._sync_shared_extruder_stepper(tool)
             self._set_tool_frame(tool)
             # Tool is on the carriage and verified: its runout / clog
             # sensors become the live ones (the app does this 3 s later
             # from a thread; here the grab moves are already complete).
             self._arm_runout(tool)
+            return return_retracted
 
     # ---------------- release ----------------
 
@@ -1073,10 +1223,15 @@ class FFToolchange:
         # which is what a file actually issues -- honour RESTORE_AXIS and the
         # [ff_toolchange] restore_axis default the same way SELECT_TOOL does.
         restore_axis = self._restore_axis_arg(gcmd)
-        # Captured before anything moves; replayed only if the change
-        # succeeded, since a half-finished sequence has no position worth
-        # returning to.
-        resume = self._capture_position() if restore_axis else None
+        # Capture before anything moves. Whether XY is actually replayed is
+        # decided after the current tool is known: a position on the
+        # registered prime tower is a valid continuation point, while a
+        # position over the model must not receive the new tool's descent and
+        # stationary pressure recovery.
+        travel_preparation = (self.restore_z_hop > 0.
+                              or self.restore_retract > 0.)
+        resume = (self._capture_position()
+                  if restore_axis or travel_preparation else None)
         self.changing = True
         try:
             self._wait_moves()
@@ -1085,19 +1240,51 @@ class FFToolchange:
             # would mean releasing the wrong tool -- moving to another tool's
             # dock and dropping the one we are actually carrying into it.
             current, _ = self._derive_current_tool()
+            changed_tool = current != tool
+            restore_xy = ('X' in restore_axis or 'Y' in restore_axis)
+            no_tower_change = (current >= 0 and restore_xy
+                               and self.prime_tower_geometry is None)
+            skip_model_xy = (
+                current >= 0 and restore_xy
+                and (self.prime_tower_geometry is None
+                     or not self._position_is_in_prime_tower(resume)))
+            effective_restore_axis = restore_axis
+            if skip_model_xy:
+                effective_restore_axis = ''.join(
+                    axis for axis in restore_axis if axis not in 'XY')
+                if no_tower_change:
+                    self.gcode.respond_info(
+                        "ff_toolchange: T%d selected without a prime tower;"
+                        " keeping the tool raised at the safe corridor for"
+                        " the post-heat chute prime" % tool)
+                else:
+                    self.gcode.respond_info(
+                        "ff_toolchange: T%d issued outside the registered"
+                        " prime tower; keeping the tool raised/retracted for"
+                        " the slicer's tower travel" % tool)
+            prepare_return = (resume is not None
+                              and (not skip_model_xy or travel_preparation))
             if current != tool:
                 if current >= 0:
+                    if prepare_return:
+                        self._raise_before_docking(resume)
                     self._release(current)
                 # _grab activates the extruder and applies the tool offsets,
                 # as the app does inside doGrabExtruderLatest.
-                self._grab(tool)
+                return_retracted = self._grab(
+                    tool, retract_in_dock=prepare_return)
+                if no_tower_change and self.no_tower_prime_macro:
+                    self._run('%s TOOL=%d'
+                              % (self.no_tower_prime_macro, tool))
             else:
+                return_retracted = False
                 # Same tool re-selected: still re-activate and re-apply, so
                 # the first Tn after a RESTART (which wiped the gcode
                 # offsets) does not leave the mounted tool offset-less. Both
                 # calls are idempotent.
                 self._run('ACTIVATE_EXTRUDER EXTRUDER=%s'
                           % self._extruder_name(tool))
+                self._sync_shared_extruder_stepper(tool)
                 self._set_tool_frame(tool)
                 self._arm_runout(tool)
             # No channel to announce. FlashForge's virtual_sdcard tracked one
@@ -1105,7 +1292,10 @@ class FFToolchange:
             # channel. Upstream needs none: both apply to the ACTIVE extruder,
             # which _grab has just set to this tool.
             if resume is not None:
-                self._restore_position(restore_axis, resume)
+                self._restore_position(
+                    effective_restore_axis, resume,
+                    prepare_toolchange_travel=changed_tool,
+                    return_retracted=return_retracted)
         except FFToolchangeError as err:
             raise gcmd.error(str(err))
         except self.printer.command_error:
@@ -1196,7 +1386,8 @@ class FFToolchange:
 
     cmd_TOOLCHANGE_SET_PRINT_OFFSET_help = (
         "Apply the app's absolute print-start Z offset "
-        "(NOZZLE=<degC> [BED=<degC>] [LAYER=<mm>] [TOOL=<0..3>] | CLEAR=1)")
+        "(NOZZLE=<degC> [BED=<degC>] [LAYER=<mm>] [PLATE=<mm>] "
+        "[TOOL=<0..3>] | CLEAR=1)")
 
     def cmd_TOOLCHANGE_SET_PRINT_OFFSET(self, gcmd):
         """Absolute print-start Z offset, ported from BuildPage::startPrint
@@ -1225,8 +1416,9 @@ class FFToolchange:
         adding it again would double it. What is left is global to the job
         rather than to a tool, which is exactly the layer homing_origin is:
 
-            SET_GCODE_OFFSET Z = temp + bed + layer   (+ the babystep,
-                                                       which stays put)
+            SET_GCODE_OFFSET Z = temp + bed + layer + plate + material
+                                                       (+ the babystep,
+                                                        which stays put)
 
         The X/Y this used to write are gone with the gap, for the same
         reason. What is left goes into the transform's own job_z rather
@@ -1239,7 +1431,11 @@ class FFToolchange:
         previous job term rather than accumulating on top of it, so a
         per-layer caller cannot drift."""
         if gcmd.get_int('CLEAR', 0, minval=0, maxval=1):
-            previous, self.job_z = self.job_z, 0.0
+            previous = self.job_z
+            self.print_base_z = 0.0
+            self.plate_z = 0.0
+            self.material_z = 0.0
+            self.job_z = 0.0
             self._reset_gcode_position()
             gcmd.respond_info("print Z offset cleared (was %+.3f); the"
                               " babystep and tool calibration stay"
@@ -1248,6 +1444,7 @@ class FFToolchange:
         nozzle = gcmd.get_float('NOZZLE')
         bed = gcmd.get_float('BED', 0.)
         layer = gcmd.get_float('LAYER', 0.)
+        plate = gcmd.get_float('PLATE', 0., minval=-0.5, maxval=0.5)
         tool = gcmd.get_int('TOOL', -1, minval=-1, maxval=EXTRUDER_COUNT - 1)
         if tool < 0:
             current, _reason = self._current_tool_or_none()
@@ -1272,15 +1469,96 @@ class FFToolchange:
         int_layer = int(layer * 100.0)
         if 0 < int_layer <= 10:
             z += -0.06
+        self.print_base_z = z
+        self.plate_z = plate
+        self.job_z = self.print_base_z + self.plate_z + self.material_z
+        self._reset_gcode_position()
         gcmd.respond_info(
             "print Z offset for T%d: %.3f (temp %+.3f, bed %+.2f,"
-            " layer %+.2f); T%d frame carries gap %+.3f, z_adjust %+.3f"
-            % (tool, z, (nozzle - 120.0) * temp_coeff,
+            " layer %+.2f, plate %+.3f, material %+.3f); T%d frame"
+            " carries gap %+.3f, z_adjust %+.3f"
+            % (tool, self.job_z, (nozzle - 120.0) * temp_coeff,
                0.08 if bed >= 100.0 else 0.0,
                -0.06 if 0 < int_layer <= 10 else 0.0,
-               tool, nozzles[tool][2] - z_station, z_adjusts[tool]))
-        self.job_z = z
+               self.plate_z, self.material_z, tool,
+               nozzles[tool][2] - z_station, z_adjusts[tool]))
+
+    cmd_TOOLCHANGE_SET_MATERIAL_OFFSET_help = (
+        "Set the active filament's absolute print Z correction "
+        "(VALUE=<-0.5..0.5mm> [MOVE=1])")
+
+    def cmd_TOOLCHANGE_SET_MATERIAL_OFFSET(self, gcmd):
+        """Replace the material component without accumulating or babystepping.
+
+        Orca's Filament start G-code runs after T<n>, so a profile can issue
+        this command whenever its material becomes active.  Repeating the
+        same VALUE is idempotent.  When Z is homed and a tool is mounted,
+        MOVE=1 (the default) applies the small correction as a dedicated Z
+        move instead of folding it diagonally into the next prime-tower line.
+        """
+        value = gcmd.get_float('VALUE', minval=-0.5, maxval=0.5)
+        move = gcmd.get_int('MOVE', 1, minval=0, maxval=1)
+        previous = self.material_z
+        if value == previous:
+            gcmd.respond_info(
+                "material Z offset unchanged at %+.3f; total print Z %+.3f"
+                % (value, self.job_z))
+            return
+
+        gcode_move = self.printer.lookup_object('gcode_move')
+        position = list(gcode_move.get_status()['gcode_position'])
+        self.material_z = value
+        self.job_z = self.print_base_z + self.plate_z + self.material_z
         self._reset_gcode_position()
+
+        mounted, _reason = self._current_tool_or_none()
+        toolhead = self.printer.lookup_object('toolhead')
+        homed = toolhead.get_status(self.reactor.monotonic())['homed_axes']
+        moved = move and mounted is not None and mounted >= 0 and 'z' in homed
+        if moved:
+            self._run('SAVE_GCODE_STATE NAME=_ff_material_z')
+            try:
+                self._run('G90')
+                self._run('G1 Z%.3f F%d'
+                          % (position[2], self.restore_z_feed))
+            finally:
+                self._run('RESTORE_GCODE_STATE NAME=_ff_material_z')
+
+        gcmd.respond_info(
+            "material Z offset %+.3f -> %+.3f; total print Z %+.3f%s"
+            % (previous, value, self.job_z,
+               " (Z moved)" if moved else ""))
+
+    cmd_TOOLCHANGE_SET_PRIME_TOWER_help = (
+        "Register or clear the current job's prime-tower XY bounds")
+
+    def cmd_TOOLCHANGE_SET_PRIME_TOWER(self, gcmd):
+        if gcmd.get_int('CLEAR', 0):
+            self.prime_tower_geometry = None
+            gcmd.respond_info("ff_toolchange: prime-tower geometry cleared")
+            return
+        width = gcmd.get_float('WIDTH', above=0.)
+        depth = gcmd.get_float('DEPTH', width, above=0.)
+        brim = gcmd.get_float('BRIM', 0., minval=0.)
+        rotation = gcmd.get_float('ROT', 0.)
+        safety = gcmd.get_float('SAFETY', 1., minval=0.)
+        cx = gcmd.get_float('CENTER_X', None)
+        cy = gcmd.get_float('CENTER_Y', None)
+        if (cx is None) != (cy is None):
+            raise gcmd.error(
+                "TOOLCHANGE_SET_PRIME_TOWER: give both CENTER_X and CENTER_Y")
+        if cx is None:
+            x = gcmd.get_float('X')
+            y = gcmd.get_float('Y')
+            cx, cy = x + width / 2., y + depth / 2.
+        hx, hy = width / 2. + brim + safety, depth / 2. + brim + safety
+        angle = math.radians(rotation)
+        self.prime_tower_geometry = (
+            cx, cy, hx, hy, math.cos(angle), math.sin(angle), rotation)
+        gcmd.respond_info(
+            "ff_toolchange: prime tower center %.3f,%.3f half-size"
+            " %.3fx%.3f rotation %.1f"
+            % (cx, cy, hx, hy, rotation))
 
     cmd_TOOL_Z_ADJUST_help = (
         "Per-tool Z correction, applied live: TOOL_Z_ADJUST TOOL=<0..3> "
@@ -1511,9 +1789,21 @@ class FFToolchange:
                          % (applied, self.offset_x[applied],
                             self.offset_y[applied], self.offset_z[applied],
                             self.job_z))
+            lines.append("  job Z parts: base %+.3f, plate %+.3f,"
+                         " material %+.3f"
+                         % (self.print_base_z, self.plate_z,
+                            self.material_z))
         if self.runout_switch or self.runout_motion:
             lines.append("  runout sensors armed: %s"
                          % (", ".join(self._armed_sensors()) or "none"))
+        if self.prime_tower_geometry is None:
+            lines.append("  prime tower geometry: none")
+        else:
+            cx, cy, hx, hy, _cos_a, _sin_a, rotation = (
+                self.prime_tower_geometry)
+            lines.append("  prime tower: center %.3f,%.3f half-size"
+                         " %.3fx%.3f rotation %.1f"
+                         % (cx, cy, hx, hy, rotation))
         for i, sensor in enumerate(self.dock_sensors):
             try:
                 lines.append("  T%d in dock (%s): %s"
@@ -1584,6 +1874,12 @@ class FFToolchange:
         if current < 0:
             gcmd.respond_info("no tool mounted (%s)" % reason)
             return
+        # Keep UI status at "changing" for the whole release.  While the
+        # tool seats, the dock switch can become active shortly before the
+        # carriage grab switch clears.  That is a normal transient, but the
+        # sensor-derived status is deliberately strict and would otherwise
+        # expose it as "error" to HelixScreen.
+        self.changing = True
         try:
             self._ensure_homed('xy')
             self._release(current)
@@ -1591,6 +1887,8 @@ class FFToolchange:
                 self._restore_position(restore_axis, resume)
         except FFToolchangeError as err:
             raise gcmd.error(str(err))
+        finally:
+            self.changing = False
 
     def print_offset_ready(self, tool=None):
         """Can TOOLCHANGE_SET_PRINT_OFFSET succeed? Needs station_z and
