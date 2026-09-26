@@ -329,6 +329,11 @@ class FFToolchange:
             maxval=self.restore_retract)
         self.restore_unretract_feed = config.getint(
             'restore_unretract_feed', self.restore_retract_feed, minval=1)
+        # Optional hand-off used by the local no-prime-tower workflow.  The
+        # macro only marks the newly selected tool; Orca's following M109 then
+        # performs the hot chute prime at a safe position.
+        self.no_tower_prime_macro = config.get(
+            'no_tower_prime_macro', '').strip()
 
         # Sensor names.
         #  position buttons: one per tool, PRESSED == that tool is docked.
@@ -1237,17 +1242,26 @@ class FFToolchange:
             current, _ = self._derive_current_tool()
             changed_tool = current != tool
             restore_xy = ('X' in restore_axis or 'Y' in restore_axis)
-            skip_model_xy = (current >= 0 and restore_xy
-                             and self.prime_tower_geometry is not None
-                             and not self._position_is_in_prime_tower(resume))
+            no_tower_change = (current >= 0 and restore_xy
+                               and self.prime_tower_geometry is None)
+            skip_model_xy = (
+                current >= 0 and restore_xy
+                and (self.prime_tower_geometry is None
+                     or not self._position_is_in_prime_tower(resume)))
             effective_restore_axis = restore_axis
             if skip_model_xy:
                 effective_restore_axis = ''.join(
                     axis for axis in restore_axis if axis not in 'XY')
-                self.gcode.respond_info(
-                    "ff_toolchange: T%d issued outside the registered prime"
-                    " tower; keeping the tool raised/retracted for the"
-                    " slicer's tower travel" % tool)
+                if no_tower_change:
+                    self.gcode.respond_info(
+                        "ff_toolchange: T%d selected without a prime tower;"
+                        " keeping the tool raised at the safe corridor for"
+                        " the post-heat chute prime" % tool)
+                else:
+                    self.gcode.respond_info(
+                        "ff_toolchange: T%d issued outside the registered"
+                        " prime tower; keeping the tool raised/retracted for"
+                        " the slicer's tower travel" % tool)
             prepare_return = (resume is not None
                               and (not skip_model_xy or travel_preparation))
             if current != tool:
@@ -1259,6 +1273,9 @@ class FFToolchange:
                 # as the app does inside doGrabExtruderLatest.
                 return_retracted = self._grab(
                     tool, retract_in_dock=prepare_return)
+                if no_tower_change and self.no_tower_prime_macro:
+                    self._run('%s TOOL=%d'
+                              % (self.no_tower_prime_macro, tool))
             else:
                 return_retracted = False
                 # Same tool re-selected: still re-activate and re-apply, so
