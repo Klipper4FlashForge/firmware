@@ -41,6 +41,10 @@ both printer models or through every real-world workflow.
 
 ### Fixed
 
+- An AFC toolchange (`T0`..`T3`) no longer shuts the printer down with
+  "Timer too close" right after the grab. AFC wrote its statistics to
+  Moonraker with blocking requests while the moves back to the print were
+  queued; those writes now run on a background thread.
 - HelixScreen's tool remap sent `ASSIGN_TOOL`, which this firmware refuses.
   With AFC present HelixScreen runs its AFC backend, which remaps through
   `SET_MAP` instead. Not yet confirmed on a printer.

@@ -128,8 +128,11 @@ run on a printer yet. In order, stopping at the first that fails:
    backend with four slots, and its tool-offset wizard still runs. OrcaSlicer's
    device tab shows four trays, not eight.
 
-The risks worth watching while doing this: AFC makes blocking HTTP calls to
-Moonraker from inside klippy, and restores the toolhead position through
+AFC's statistics writes to Moonraker used to block klippy right after every
+AFC toolchange, which shut the printer down with "Timer too close"
+(`SELECT_TOOL` alone did not); `ff_afc.py` moves them to a background thread,
+so step 2 now also checks that fix. The risk still worth watching: AFC
+restores the toolhead position through
 `gcode_move`, while our tool offsets sit below it in `ff_toolchange`'s
 transform. Step 2's first-layer height and step 4's resume height are the
 checks for the second.
