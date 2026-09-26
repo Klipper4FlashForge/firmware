@@ -14,7 +14,10 @@ MODULE = (ROOT / "pkgs" / "klipper" / "payload" / "klipper" /
 
 
 class FakePrinterExtruder:
+    original_m109_calls = 0
+
     def __init__(self, config, extruder_num):
+        self.printer = config.get_printer()
         self.name = config.get_name()
         self.extruder_stepper = None
         if (config.get("step_pin", None) is not None
@@ -24,6 +27,9 @@ class FakePrinterExtruder:
 
     def get_name(self):
         return self.name
+
+    def cmd_M109(self, gcmd):
+        type(self).original_m109_calls += 1
 
 
 class FakeExtruderStepper:
@@ -55,7 +61,11 @@ class FakeConfig:
 
 class FakePrinter:
     def __init__(self):
-        self.objects = {}
+        self.gcode = types.SimpleNamespace(
+            scripts=[],
+            run_script_from_command=lambda script: self.gcode.scripts.append(
+                script))
+        self.objects = {"gcode": self.gcode}
 
     def lookup_object(self, name, default=None):
         return self.objects.get(name, default)
@@ -64,9 +74,11 @@ class FakePrinter:
 @pytest.fixture
 def adapter(monkeypatch):
     original_init = FakePrinterExtruder.__init__
+    original_m109 = FakePrinterExtruder.cmd_M109
     original_pressure_advance = (
         FakeExtruderStepper.cmd_default_SET_PRESSURE_ADVANCE)
     FakeExtruderStepper.original_calls = 0
+    FakePrinterExtruder.original_m109_calls = 0
     fake_extruder = types.ModuleType("kinematics.extruder")
     fake_extruder.PrinterExtruder = FakePrinterExtruder
     fake_extruder.ExtruderStepper = FakeExtruderStepper
@@ -81,11 +93,15 @@ def adapter(monkeypatch):
 
     printer = FakePrinter()
     instance = module.load_config(FakeConfig(
-        printer, "ff_extruder", {"shared_extruder": "extruder"}))
+        printer, "ff_extruder", {
+            "shared_extruder": "extruder",
+            "post_m109_macro": "_NS_TOOLCHANGE_PRIME",
+        }))
     try:
         yield module, printer, instance
     finally:
         FakePrinterExtruder.__init__ = original_init
+        FakePrinterExtruder.cmd_M109 = original_m109
         FakeExtruderStepper.cmd_default_SET_PRESSURE_ADVANCE = (
             original_pressure_advance)
 
@@ -157,6 +173,17 @@ def test_pressure_advance_refuses_wrong_motion_queue(adapter):
     handler = module.klipper_extruder.ExtruderStepper()
     with pytest.raises(RuntimeError, match="not synced"):
         handler.cmd_default_SET_PRESSURE_ADVANCE(Gcmd())
+
+
+def test_post_m109_macro_runs_after_native_wait(adapter):
+    module, printer, _instance = adapter
+    extruder = module.klipper_extruder.PrinterExtruder(
+        FakeConfig(printer, "extruder"), 0)
+
+    extruder.cmd_M109(types.SimpleNamespace())
+
+    assert FakePrinterExtruder.original_m109_calls == 1
+    assert printer.gcode.scripts == ["_NS_TOOLCHANGE_PRIME"]
 
 
 def test_restart_rebinds_adapter_to_new_printer(adapter):

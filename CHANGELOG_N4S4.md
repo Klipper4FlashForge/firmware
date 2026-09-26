@@ -1,6 +1,6 @@
 # Creator 5 N4S4 – Change Log
 
-Last updated: 2026-09-25
+Last updated: 2026-09-26
 
 This document describes the local changes compared with the original
 FlashForge/Klipper4FlashForge implementation. All printer paths are relative
@@ -47,6 +47,9 @@ to `/usr/data`.
   already-installed class adapters are rebound to Klipper's newly created
   Printer object, while a genuinely duplicated `[ff_extruder]` section in
   the same configuration is still rejected.
+- The optional `post_m109_macro` hook runs after Klipper's native `M109`
+  temperature wait. This supports post-heat tool recovery without trying to
+  replace the firmware's built-in `M109` command from a G-code macro.
 
 ## `/usr/data/anvil/klipper/klippy/extras/ff_toolchange.py`
 
