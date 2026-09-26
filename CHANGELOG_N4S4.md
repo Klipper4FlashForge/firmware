@@ -303,16 +303,22 @@ restore_unretract_feed: 200
   retract is deliberately required.
 - A real slicer tool change without a registered prime tower no longer returns
   to the previous object's final XY position. It stays raised at the safe X250
-  corridor while Orca's following `M109` heats the new tool, then performs a
-  5 mm pressure-building extrusion in the rear-right chute before Orca travels
-  to the next object. Start-purge tool selections use `RESTORE_AXIS=` and do
-  not arm this post-heat prime; jobs with a registered prime tower retain the
-  existing tower recovery path.
+  corridor while Orca's following `M109` heats the new tool. On the first use
+  of a tool in that job, it then performs a 5 mm pressure-building extrusion
+  in the rear-right chute before Orca travels to the object. A per-job bitmask
+  prevents that purge from repeating on later layers. The initial tool is
+  marked as prepared by the startup purge line; `START_PURGE_SET MODE=ALL`
+  marks all tools as prepared, disabling every in-print chute purge. Start-
+  purge tool selections use `RESTORE_AXIS=` and do not arm the hook; jobs with
+  a registered prime tower retain the existing tower recovery path.
 - Before leaving that chute, the recovery macro retracts 0.4 mm, withdraws to
   X250, and travels straight down the clear right-hand corridor to Y0. It then
   restores the same 0.4 mm before handing control back to Orca. This prevents
   a diagonal string across an already printed object without carrying an
   extrusion deficit into the next perimeter.
+- Reused tools still take the non-extruding `X250 -> Y0` corridor after a
+  change, so suppressing repeated purges does not reintroduce diagonal travel
+  across the printed parts.
 - `_NS_BEFORE_PRINT` keeps the stock print lifecycle intact while
   applying that mode. `ALL` sends every used tool through the rear-right
   purge-and-wipe sequence; `FIRST` cleans only the initial tool; `OFF` skips
