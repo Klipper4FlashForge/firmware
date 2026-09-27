@@ -111,7 +111,7 @@ run on a printer yet. In order, stopping at the first that fails:
 3. **A remap at print start.** `SET_MAP LANE=e2 MAP=T0`, then print a file
    that starts on T0. The console says `AFC map: file tools [0] print on
    heads [2]`, the third head is gated, cleaned, heated and printed with,
-   and the first layer sits right. `RESET_AFC_MAPPING` afterwards.
+   and the first layer sits right. `AFC_RESET_MAPPING` afterwards.
 4. **Infinite spool.** Same filament in heads 0 and 1,
    `SET_RUNOUT LANE=e0 RUNOUT=e1`, then pull the filament out of head 0
    mid-print. The print pauses, head 1 comes up to head 0's temperature,
@@ -130,7 +130,7 @@ run on a printer yet. In order, stopping at the first that fails:
 
 AFC's statistics writes to Moonraker used to block klippy right after every
 AFC toolchange, which shut the printer down with "Timer too close"
-(`SELECT_TOOL` alone did not); `ff_afc.py` moves them to a background thread,
+(`SELECT_TOOL` alone did not); current AFC moves them to a background thread,
 so step 2 now also checks that fix. The risk still worth watching: AFC
 restores the toolhead position through
 `gcode_move`, while our tool offsets sit below it in `ff_toolchange`'s

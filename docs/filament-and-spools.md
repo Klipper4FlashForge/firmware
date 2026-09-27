@@ -31,16 +31,17 @@ Reforge that T0 now means that head:
 SET_MAP LANE=e2 MAP=T0
 ```
 
-The two heads swap numbers: `e2` answers to T0 and `e0` takes over T2. The
-file does not change. When the print starts, the tool check, the nozzle
+`e2` now answers to both T0 and its original T2; `e0` is left without T0.
+The file does not change. When the print starts, the tool check, the nozzle
 clean and the heating all follow the new numbers, so it is the third head
-that gets cleaned and used for T0.
+that gets cleaned and used for T0. This also lets several file tools use one
+head: run `SET_MAP LANE=e2 MAP=T1` as well and both T0 and T1 select `e2`.
 
-The swap is remembered across restarts. To put every head back on its own
+The mapping is remembered across restarts. To put every head back on its own
 number:
 
 ```gcode
-RESET_AFC_MAPPING RUNOUT=no
+AFC_RESET_MAPPING RUNOUT=no
 ```
 
 Without `RUNOUT=no` it also clears the backup heads described next.

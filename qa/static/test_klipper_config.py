@@ -388,7 +388,7 @@ def _render(cp, macro, params, printer):
 
 
 def _start_print(params, maps=None, afc=True):
-    """START_PRINT's own lines for AFC maps `maps`: {lane: 'T<n>'}.
+    """START_PRINT's own lines for AFC maps `maps`: {lane: ['T<n>', ...]}.
     Unlisted lanes keep the map ff-afc.cfg ships."""
     cp = _parse("Creator5Pro")
     lanes = _afc_lanes(cp)
@@ -399,7 +399,7 @@ def _start_print(params, maps=None, afc=True):
         for lane in lanes:
             shipped = cp.get("AFC_extruder " + lane, "map").strip()
             printer["AFC_lane " + lane] = {
-                "map": (maps or {}).get(lane, shipped), "extruder": lane}
+                "map": (maps or {}).get(lane, [shipped]), "extruder": lane}
     return _render(cp, "START_PRINT", params, printer)
 
 
@@ -420,13 +420,13 @@ def test_start_print_with_the_shipped_map_gates_and_cleans_the_files_tools():
 
 
 def test_start_print_gates_and_cleans_the_heads_afc_will_print_with():
-    """SET_MAP LANE=e2 MAP=T0 swaps T0 and T2: the file's T0 prints on the
+    """SET_MAP LANE=e2 MAP=T0 moves T0 to e2: the file's T0 prints on the
     third head, so that is the head that must be docked, calibrated and
     cleaned at the file's T0 temperature -- while START_PRINT still asks AFC
     for T0, which is what makes AFC pick the third head."""
     lines, info = _start_print({"TOOL": "0", "TOOLS": "0:220,1:230",
                                 "NOZZLE": "220", "BED": "60"},
-                               maps={"e0": "T2", "e2": "T0"})
+                               maps={"e0": [], "e2": ["T0", "T2"]})
     assert _line(lines, "_FF_PREFLIGHT") == "_FF_PREFLIGHT TOOL=2 TOOLS=2,1"
     assert _line(lines, "_FF_NOZZLE_CLEAN") == \
         "_FF_NOZZLE_CLEAN TOOLS=2,1 TEMPS=0,230.0,220.0,0 TEMP=220.0"
@@ -440,13 +440,25 @@ def test_start_print_gates_and_cleans_the_heads_afc_will_print_with():
 
 
 def test_positional_temps_follow_the_file_tool_onto_its_head():
-    """TEMPS= is indexed by the FILE's tool number, so under a swap each
+    """TEMPS= is indexed by the FILE's tool number, so under a remap each
     temperature moves with its tool to the head that will print it."""
     lines, _ = _start_print({"TOOL": "0", "TOOLS": "0,1", "TEMPS": "200,210",
                              "NOZZLE": "220"},
-                            maps={"e0": "T1", "e1": "T0"})
+                            maps={"e0": ["T1"], "e1": ["T0"]})
     assert _line(lines, "_FF_NOZZLE_CLEAN") == \
         "_FF_NOZZLE_CLEAN TOOLS=1,0 TEMPS=210.0,200.0,0,0 TEMP=220.0"
+
+
+def test_multiple_file_tools_can_map_to_one_head():
+    """AFC multiple mapping exposes a list: every T-number in it must resolve
+    to the lane's physical head for preflight, cleaning and temperatures."""
+    lines, info = _start_print(
+        {"TOOL": "1", "TOOLS": "1:220,2:220", "NOZZLE": "220"},
+        maps={"e0": [], "e1": ["T1", "T2"], "e2": []})
+    assert _line(lines, "_FF_PREFLIGHT") == "_FF_PREFLIGHT TOOL=1 TOOLS=1"
+    assert _line(lines, "_FF_NOZZLE_CLEAN") == \
+        "_FF_NOZZLE_CLEAN TOOLS=1 TEMPS=0,220.0,0,0 TEMP=220.0"
+    assert info and "file tools [1, 2] print on heads [1]" in info[0], info
 
 
 def test_start_print_without_afc_reports_takes_tools_as_heads():
@@ -460,6 +472,15 @@ def test_start_print_without_afc_reports_takes_tools_as_heads():
 # --------------------------------------------------------------------------
 # The contracts the macros rely on in ff-afc.cfg.
 # --------------------------------------------------------------------------
+
+def test_afc_multiple_mapping_is_enabled_for_helixscreen():
+    cp = _parse("Creator5Pro")
+    assert cp.getboolean("AFC", "enable_multiple_mapping")
+    end_print = cp.get("gcode_macro END_PRINT", "gcode")
+    assert "AFC_RESET_MAPPING RUNOUT=no" in end_print
+    assert "RESET_AFC_MAPPING" not in end_print.replace(
+        "AFC_RESET_MAPPING", "")
+
 
 def test_afc_lane_n_is_head_n():
     """START_PRINT, LOAD_FILAMENT and the nozzle clean find a head's lane as

@@ -19,6 +19,10 @@ both printer models or through every real-world workflow.
 
 ### Changed
 
+- AFC is updated to its 2026-09-16 DEV revision and multiple mapping is
+  enabled: several slicer T-numbers can now select the same physical head.
+  AFC now performs its own Moonraker writes off Klipper's reactor, replacing
+  this firmware's `ff_afc` compatibility hook.
 - `T0`..`T3` and `M104`/`M109 T<n>` follow AFC's map. The print-start tool
   check, calibration check and nozzle clean act on the heads the map picks.
   `SELECT_TOOL T=<n>` still selects a head by its own number.
@@ -44,7 +48,7 @@ both printer models or through every real-world workflow.
 - An AFC toolchange (`T0`..`T3`) no longer shuts the printer down with
   "Timer too close" right after the grab. AFC wrote its statistics to
   Moonraker with blocking requests while the moves back to the print were
-  queued; those writes now run on a background thread.
+  queued; the updated AFC runs those writes on its background thread.
 - HelixScreen's tool remap sent `ASSIGN_TOOL`, which this firmware refuses.
   With AFC present HelixScreen runs its AFC backend, which remaps through
   `SET_MAP` instead. Not yet confirmed on a printer.
