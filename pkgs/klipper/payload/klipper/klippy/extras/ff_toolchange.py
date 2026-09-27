@@ -275,7 +275,7 @@ class FFToolchange:
         # clearing one does not silently clear the other.
         self.job_z = 0.0
         self.refresh_offsets()
-        # True while a SELECT_TOOL sequence is running (reported as
+        # True while a SELECT_TOOL or park sequence is running (reported as
         # toolchanger.status = 'changing').
         self.changing = False
         # Reported as every tool's `fan`: the part-cooling fan is shared on
@@ -1407,11 +1407,15 @@ class FFToolchange:
         if current < 0:
             gcmd.respond_info("no tool mounted (%s)" % reason)
             return
+        was_changing = self.changing
+        self.changing = True
         try:
             self._ensure_homed('xy')
             self._release(current)
         except FFToolchangeError as err:
             raise gcmd.error(str(err))
+        finally:
+            self.changing = was_changing
 
     def print_offset_ready(self, tool=None):
         """Can TOOLCHANGE_SET_PRINT_OFFSET succeed? Needs station_z and
