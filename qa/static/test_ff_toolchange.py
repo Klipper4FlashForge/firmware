@@ -124,12 +124,27 @@ def test_purge_followed_pickups_use_a_one_shot_stronger_retract():
     )[1].split("[gcode_macro _NS_AFTER_PRINT]", 1)[0]
     assert "TOOLCHANGE_PREPARE_PICKUP ENABLE=0" in before_print
     purge_line = config_source.split(
-        "[gcode_macro PURGE_NEAR_OBJECT]", 1
+        "[gcode_macro _PURGE_NEAR_OBJECT]", 1
     )[1]
+    assert "[gcode_macro PURGE_NEAR_OBJECT]" not in config_source
     assert "params.E|default(10)|float" in purge_line
     assert "params.LEAD|default(3)|float" in purge_line
     assert "G1 E{lead} F{feed}" in purge_line
     assert "G1 X{x2} E{e - lead} F{feed}" in purge_line
+
+
+def test_start_purge_preheats_the_next_tool_during_current_cleanup():
+    config_source = CONFIG.read_text(encoding="utf-8")
+    clean = config_source.split(
+        "[gcode_macro _FF_NOZZLE_CLEAN]", 1
+    )[1].split("[gcode_macro PURGE]", 1)[0]
+
+    prep = clean.index("_FF_FILAMENT_PREP TOOL={tool}")
+    preheat = clean.index("M104 S{next_temp} T{next_tool}")
+    purge = clean.index("G1 E{ff.purge_length} F{speed}")
+    assert prep < preheat < purge
+    assert "{% if not loop.last %}" in clean
+    assert "{% set next_tool = tools[loop.index] %}" in clean
 
 
 def test_chute_purges_use_the_front_right_lip_wipe():

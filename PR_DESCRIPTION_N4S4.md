@@ -173,6 +173,9 @@ TOOLCHANGE_SET_MATERIAL_OFFSET VALUE=0.000
   The `fm_exN` motion sensors remain runtime clog/motion detectors.
 - Use safe non-diagonal paths for consecutive rear-chute purge operations, so
   the carriage does not cross an occupied dock or purge onto the plate.
+- During `START_PURGE`, start heating the next requested tool to its own target
+  as soon as the current tool reaches purge temperature. Heating then overlaps
+  the current purge, wipe and cooldown instead of beginning after pickup.
 - After START_PURGE and one-time no-tower mini-purges, wipe the nozzle with a
   controlled zigzag across the front-right silicone lip. The rear-to-front
   travel is raised and stays at X256 outside the bed; the wipe runs at

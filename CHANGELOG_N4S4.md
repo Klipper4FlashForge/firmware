@@ -127,7 +127,7 @@ to `/usr/data`.
   `purge_retract_dwell_ms` pause lets nozzle pressure settle before the tool
   starts leaving its dock.
 - `TOOLCHANGE_PREPARE_PICKUP` arms this stronger retract for one real pickup.
-  `ADAPTIVE_MESH` uses it for the initial tool because `PURGE_NEAR_OBJECT`
+  `ADAPTIVE_MESH` uses it for the initial tool because `_PURGE_NEAR_OBJECT`
   follows; registered prime-tower jobs select it automatically on every real
   tool change. Other pickups retain the conservative normal retract.
 - The prepared initial pickup no longer restores XY to the last adaptive-mesh
@@ -354,6 +354,10 @@ restore_unretract_feed: 200
   `MODE=<mode>` selects one directly.
 - `START_PURGE_STATUS` reports the current pre-print purge mode without
   changing it.
+- Sequential `START_PURGE` cleaning preheats the next requested tool to its
+  individual target after the current tool reaches temperature. The next
+  heater therefore runs during the current purge, lip wipe and cooldown,
+  reducing the wait after the following pickup.
 - `_FF_FILAMENT.clean_wipe_temp` and the local `_FF_NOZZLE_WIPE` override use
   an absolute 150 C front-wipe target. Unlike the stock 100 C temperature
   reduction, the resulting wipe temperature no longer changes with the purge
@@ -417,9 +421,10 @@ restore_unretract_feed: 200
   Orca's custom start G-code, uses the measured second dimension, expands the
   real world-coordinate bounds by brim plus safety margin, and registers the
   same corrected geometry with `ff_toolchange.py`.
-- `PURGE_NEAR_OBJECT` calculates the bounds of all registered print objects,
+- `_PURGE_NEAR_OBJECT` calculates the bounds of all registered print objects,
   selects a safe purge line within the build plate, and prints it inside the
-  adaptively meshed area.
+  adaptively meshed area. Its leading underscore keeps this Orca-only helper
+  out of Mainsail's normal macro panel.
 - The startup purge line uses 10 mm total filament with a 3 mm stationary
   lead-in instead of 25/8 mm. Most material is deposited while moving, which
   avoids the former start blob and overly broad purge line. `E` and `LEAD`
