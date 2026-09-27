@@ -102,6 +102,27 @@ def test_status_command_is_exposed_as_a_mainsail_macro():
     assert "    FF_TOOLCHANGE_STATUS" in config_source
 
 
+def test_purge_followed_pickups_use_a_one_shot_stronger_retract():
+    module_source = MODULE.read_text(encoding="utf-8")
+    config_source = CONFIG.read_text(encoding="utf-8")
+
+    assert "'TOOLCHANGE_PREPARE_PICKUP'" in module_source
+    assert "self.purge_pickup_armed = False" in module_source
+    assert "or self.prime_tower_geometry is not None" in module_source
+    assert "purge_expected=purge_expected" in module_source
+    assert "'G4 P%d' % self.purge_retract_dwell_ms" in module_source
+    assert "purge_retract: 0.9" in config_source
+    assert "purge_retract_dwell_ms: 250" in config_source
+    adaptive_mesh = config_source.split(
+        "[gcode_macro ADAPTIVE_MESH]", 1
+    )[1].split("[gcode_macro DEFINE_PRIME_TOWER_OBJECT]", 1)[0]
+    assert "TOOLCHANGE_PREPARE_PICKUP\n    T{tool}" in adaptive_mesh
+    before_print = config_source.split(
+        "[gcode_macro _NS_BEFORE_PRINT]", 1
+    )[1].split("[gcode_macro _NS_AFTER_PRINT]", 1)[0]
+    assert "TOOLCHANGE_PREPARE_PICKUP ENABLE=0" in before_print
+
+
 def test_chute_purges_use_the_front_right_lip_wipe():
     config_source = CONFIG.read_text(encoding="utf-8")
 

@@ -72,6 +72,9 @@ optimizer.
 - Retract filament while the newly selected hot tool is still fully seated in
   its dock, before pulling it into the build area.
 - Keep retract and recovery distances and speeds independently configurable.
+- Use a stronger one-shot in-dock retract plus a short pressure-settling pause
+  when the pickup is known to be followed by the startup purge line or a
+  registered prime tower; retain the conservative retract elsewhere.
 - Perform only a small, slow stationary recovery when the captured position is
   already inside the prime tower.
 - If a tool change was requested over a printed object, suppress restoration
@@ -88,8 +91,10 @@ restore_axis: xy
 restore_feed: 30000
 restore_z_hop: 2.0
 restore_z_feed: 1200
-restore_retract: 2.0
+restore_retract: 0.4
 restore_retract_feed: 1800
+purge_retract: 0.9
+purge_retract_dwell_ms: 250
 restore_unretract: 0.4
 restore_unretract_feed: 200
 ```

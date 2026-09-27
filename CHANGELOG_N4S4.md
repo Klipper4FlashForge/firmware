@@ -122,6 +122,14 @@ to `/usr/data`.
   filament strings on the way to the prime tower.
 - Retract distance and speed are configurable through `restore_retract` and
   `restore_retract_feed`.
+- Pickups that are known to be followed by extrusion on a purge line or a
+  registered prime tower use the separate `purge_retract` distance. A short
+  `purge_retract_dwell_ms` pause lets nozzle pressure settle before the tool
+  starts leaving its dock.
+- `TOOLCHANGE_PREPARE_PICKUP` arms this stronger retract for one real pickup.
+  `ADAPTIVE_MESH` uses it for the initial tool because `PURGE_NEAR_OBJECT`
+  follows; registered prime-tower jobs select it automatically on every real
+  tool change. Other pickups retain the conservative normal retract.
 - Recovery and retract are configured separately. When the captured position
   is already on the prime tower, `restore_unretract` deliberately advances
   less filament and `restore_unretract_feed` advances it more slowly. For a
@@ -138,6 +146,8 @@ to `/usr/data`.
 - `restore_z_feed`
 - `restore_retract`
 - `restore_retract_feed`
+- `purge_retract`
+- `purge_retract_dwell_ms`
 - `restore_unretract`
 - `restore_unretract_feed`
 
@@ -241,6 +251,8 @@ restore_z_hop: 2.0
 restore_z_feed: 1200
 restore_retract: 0.4
 restore_retract_feed: 1800
+purge_retract: 0.9
+purge_retract_dwell_ms: 250
 restore_unretract: 0.4
 restore_unretract_feed: 200
 ```
@@ -257,7 +269,11 @@ restore_unretract_feed: 200
 - After the initial 20 mm dock pullback, the grabbed tool retreats to the safe
   X position at 80 mm/s (`grab_retreat_feed: 4800`). This matches the tested
   release-retreat speed and replaces the previous 25 mm/s default.
-- In-dock retract: 0.4 mm at 30 mm/s.
+- Ordinary in-dock retract: 0.4 mm at 30 mm/s.
+- A pickup followed by the startup purge line or a registered prime tower
+  retracts 0.9 mm and waits 250 ms before leaving the dock. The existing
+  0.4 mm slow recovery leaves the final 0.5 mm pressure deficit for the
+  following moving purge extrusion instead of producing a stationary blob.
 - The Z-hop and in-dock retract remain active when restoration is suppressed.
   The configured 0.4 mm slow recovery is performed only when the captured
   position is inside the prime tower; outside it, pressure is recovered by
