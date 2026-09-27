@@ -553,3 +553,14 @@ def test_the_nozzle_clean_falls_back_from_afcs_record_to_the_print(lane, want):
     lines, _ = _render(cp, "_FF_NOZZLE_CLEAN", {"TOOLS": "1", "TEMP": "210"},
                        _filament_printer(lane))
     assert _prep_temp(lines) == want, lines
+
+
+def test_afc_moves_back_at_travel_speed_within_the_limits():
+    """AFC's restore after every change runs at resume_speed/resume_z_speed,
+    25 mm/s unless set -- a visible crawl back to the print on every
+    toolchange. Set, and inside what [printer] allows."""
+    cp = _parse("Creator5Pro")
+    xy = cp.getfloat("AFC", "resume_speed")
+    z = cp.getfloat("AFC", "resume_z_speed")
+    assert 25 < xy <= cp.getfloat("printer", "max_velocity"), xy
+    assert 0 < z <= cp.getfloat("printer", "max_z_velocity"), z
