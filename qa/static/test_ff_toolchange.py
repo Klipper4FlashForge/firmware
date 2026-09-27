@@ -139,11 +139,11 @@ def test_chute_purges_use_the_front_right_lip_wipe():
     assert "variable_clean_wipe_z_absolute: -0.9" in config_source
     assert (
         "variable_cooldown_pad_x_offsets: "
-        "[0.0, 1.0, 2.0, -4.0, -3.0, -2.0, -1.0]"
+        "[0.0, 1.0, -4.0, -3.0, -2.0, -1.0]"
     ) in config_source
     assert (
         "variable_cooldown_pad_y_offsets: "
-        "[0.0, 3.0, -4.0, -1.0, 2.0, 5.0, -2.0, 1.0, 4.0, -3.0]"
+        "[0.0, -4.0, -1.0, -2.0, -3.0]"
     ) in config_source
     assert "variable_cooldown_pad_index: 0" in config_source
     assert "variable_cooldown_pad_seed: -1" in config_source
@@ -153,6 +153,12 @@ def test_chute_purges_use_the_front_right_lip_wipe():
     assert "variable_lip_wipe_feed: 9000" in config_source
     assert "[gcode_macro _NS_CHUTE_LIP_WIPE]" in config_source
     assert "{% set wipe_z = ff.lip_wipe_z|float %}" in config_source
+    assert "{% set exit_z = params.EXIT_Z|default(safe_z)|float %}" in config_source
+    assert "G1 Z{exit_z} F{ff.clean_wipe_z_feed}" in config_source
+    assert (
+        "_NS_CHUTE_LIP_WIPE TOOL={tool} "
+        "EXIT_Z={ff.lip_wipe_z|float + 2.0}"
+    ) in config_source
     assert "{% set wipe_z = ff.clean_wipe_z_absolute|float %}" in config_source
     assert (
         "SET_GCODE_VARIABLE MACRO=_FF_FILAMENT "
@@ -195,7 +201,9 @@ def test_cooldown_pad_cycle_covers_every_safe_grid_point_once():
             for index in range(count)
         ]
 
-        assert len(points) == 70
-        assert len(set(points)) == 70
-        assert {x for x, _y in points} == set(range(-4, 3))
-        assert {y for _x, y in points} == set(range(-4, 6))
+        assert len(points) == 30
+        assert len(set(points)) == 30
+        assert {x for x, _y in points} == set(range(-4, 2))
+        assert {y for _x, y in points} == set(range(-4, 1))
+        assert max(266.5 + x for x, _y in points) <= 268.0
+        assert max(13.8 + y for _x, y in points) <= 14.0

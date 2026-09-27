@@ -298,10 +298,14 @@ restore_unretract_feed: 200
 - The following cooldown-pad park uses an independent absolute G-code height
   of `Z-0.9`. This reduces compression of the silicone pad compared with the
   previous raw-frame conversion, which produced approximately `Z-1.9`.
-- Cooldown locations cycle through all 70 points of a 1 mm grid around the
-  original `X266.5/Y13.8` position. The configured safe offsets cover
-  `X-4..+2` and `Y-4..+5` and distribute successive cooldowns across both
-  axes without duplicates before repeating.
+- Before moving from the lip to the cooldown pad, the nozzle now lifts only
+  2 mm from `Z-1.0` to `Z1.0`; direct in-print lip wipes retain their higher
+  safe-Z exit.
+- Cooldown locations cycle through all 30 points of a 1 mm grid around the
+  original `X266.5/Y13.8` position. The collision-safe offsets cover
+  `X-4..+1` and `Y-4..0`, giving actual maxima of `X267.5/Y13.8` inside the
+  measured `X268/Y14` limits next to parked T0. Successive cooldowns still
+  cover both axes without duplicates before repeating.
 - A pseudo-random starting point is derived from Klipper CPU time, current job
   duration, and the active tool after every restart. The seed and sequence
   counter live only in macro RAM; no per-cooldown flash write is performed.
