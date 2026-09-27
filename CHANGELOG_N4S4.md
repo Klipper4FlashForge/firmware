@@ -268,8 +268,8 @@ restore_unretract_feed: 200
 - Chute purges now travel to the front-right service area while raised and
   remain at `X256` for the full rear-to-front move, outside the printable bed.
 - On the short lip, the nozzle performs a seven-pass zigzag between
-  `X263` and `X271`, advancing from `Y0` to `Y7`, then raises again before
-  any subsequent move.
+  `X263` and `X271`, starting at the outside edge `X271/Y0` and advancing to
+  `Y7`, then raises again before any subsequent move.
 - The wipe runs at 200 mm/s (`F12000`) and remains configurable through
   `lip_wipe_feed`.
 - The lip is traversed at absolute G-code `Z0` in the active tool frame.

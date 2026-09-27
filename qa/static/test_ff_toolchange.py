@@ -110,7 +110,9 @@ def test_chute_purges_use_the_front_right_lip_wipe():
     assert "variable_lip_wipe_feed: 12000" in config_source
     assert "[gcode_macro _NS_CHUTE_LIP_WIPE]" in config_source
     assert "{% set wipe_z = ff.lip_wipe_z|float %}" in config_source
-    assert "G1 X{xr} Y{y0 + 7.0} F{ff.lip_wipe_feed}" in config_source
+    assert "G1 X{xr} F{ff.clean_wipe_feed}" in config_source
+    assert "G1 X{xl} Y{y0 + 1.0} F{ff.lip_wipe_feed}" in config_source
+    assert "G1 X{xl} Y{y0 + 7.0} F{ff.lip_wipe_feed}" in config_source
     assert config_source.count("_NS_CHUTE_LIP_WIPE TOOL=") == 2
     assert "variable_exit_x:" not in config_source
     assert "variable_exit_y:" not in config_source
