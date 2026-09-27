@@ -104,12 +104,14 @@ def test_chute_purges_use_the_front_right_lip_wipe():
     config_source = CONFIG.read_text(encoding="utf-8")
 
     assert "variable_lip_wipe_enabled: 1" in config_source
+    assert "variable_clean_wipe_z_absolute: -0.9" in config_source
     assert "variable_lip_wipe_z: 0.0" in config_source
     assert "variable_lip_wipe_x_left: 263.0" in config_source
     assert "variable_lip_wipe_x_right: 271.0" in config_source
     assert "variable_lip_wipe_feed: 12000" in config_source
     assert "[gcode_macro _NS_CHUTE_LIP_WIPE]" in config_source
     assert "{% set wipe_z = ff.lip_wipe_z|float %}" in config_source
+    assert "{% set wipe_z = ff.clean_wipe_z_absolute|float %}" in config_source
     assert "G1 X{xr} F{ff.clean_wipe_feed}" in config_source
     assert "G1 X{xl} Y{y0 + 1.0} F{ff.lip_wipe_feed}" in config_source
     assert "G1 X{xl} Y{y0 + 7.0} F{ff.lip_wipe_feed}" in config_source

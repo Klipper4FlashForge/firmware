@@ -168,7 +168,9 @@ TOOLCHANGE_SET_MATERIAL_OFFSET VALUE=0.000
 - After START_PURGE and one-time no-tower mini-purges, wipe the nozzle with a
   controlled zigzag across the front-right silicone lip. The rear-to-front
   travel is raised and stays at X256 outside the bed; the wipe runs at
-  absolute G-code Z0, is configurable, and is enabled by default.
+  absolute G-code Z0, is configurable, and is enabled by default. The
+  following cooldown-pad position is limited to absolute G-code Z-0.9 to
+  avoid pressing the nozzle unnecessarily deep into the silicone.
 - Raise the front-wipe target to an absolute 150 C.
 
 ### Timelapse controls

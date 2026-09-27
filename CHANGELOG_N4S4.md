@@ -275,6 +275,9 @@ restore_unretract_feed: 200
 - The lip is traversed at absolute G-code `Z0` in the active tool frame.
   Klipper applies the selected tool's calibrated transform; the macro does
   not subtract the roughly 2.9 mm nozzle/station offset a second time.
+- The following cooldown-pad park uses an independent absolute G-code height
+  of `Z-0.9`. This reduces compression of the silicone pad compared with the
+  previous raw-frame conversion, which produced approximately `Z-1.9`.
 - The movement is enabled by default with `_FF_FILAMENT` variable
   `lip_wipe_enabled: 1`; setting it to `0` keeps the safe raised route but
   skips lowering and zigzagging.
