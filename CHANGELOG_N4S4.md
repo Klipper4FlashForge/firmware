@@ -1,6 +1,6 @@
 # Creator 5 N4S4 – Change Log
 
-Last updated: 2026-09-26
+Last updated: 2026-09-27
 
 This document describes the local changes compared with the original
 FlashForge/Klipper4FlashForge implementation. All printer paths are relative
@@ -262,6 +262,25 @@ restore_unretract_feed: 200
   The configured 0.4 mm slow recovery is performed only when the captured
   position is inside the prime tower; outside it, pressure is recovered by
   Orca's moving tower extrusion.
+
+### Front-right silicone-lip wipe after chute purging
+
+- Chute purges now travel to the front-right service area while raised and
+  remain at `X256` for the full rear-to-front move, outside the printable bed.
+- On the short lip, the nozzle performs a seven-pass zigzag between
+  `X263` and `X271`, advancing from `Y0` to `Y7`, then raises again before
+  any subsequent move.
+- The wipe runs at 200 mm/s (`F12000`) and remains configurable through
+  `lip_wipe_feed`.
+- The lip is traversed at absolute G-code `Z0` in the active tool frame.
+  Klipper applies the selected tool's calibrated transform; the macro does
+  not subtract the roughly 2.9 mm nozzle/station offset a second time.
+- The movement is enabled by default with `_FF_FILAMENT` variable
+  `lip_wipe_enabled: 1`; setting it to `0` keeps the safe raised route but
+  skips lowering and zigzagging.
+- It runs after every START_PURGE chute purge and after each tool's one-time
+  fallback mini-purge in jobs without a prime tower. Manual `PURGE` with its
+  default `WIPE=1` also uses it before cooling on the existing silicone pad.
 
 ### Other pre-existing local changes
 

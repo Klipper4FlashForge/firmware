@@ -35,6 +35,8 @@ optimizer.
   first-layer Z corrections.
 - Pre-print purge behavior, adaptive meshing, and timelapse capture were not
   conveniently configurable from Mainsail.
+- Residual filament could remain attached to a nozzle after a rear-chute
+  purge and be dragged from the purge area toward the print.
 - Contact-probe mesh calibration spent unnecessary time repeatedly returning
   to one fixed absolute Z travel height.
 
@@ -163,6 +165,10 @@ TOOLCHANGE_SET_MATERIAL_OFFSET VALUE=0.000
   The `fm_exN` motion sensors remain runtime clog/motion detectors.
 - Use safe non-diagonal paths for consecutive rear-chute purge operations, so
   the carriage does not cross an occupied dock or purge onto the plate.
+- After START_PURGE and one-time no-tower mini-purges, wipe the nozzle with a
+  controlled zigzag across the front-right silicone lip. The rear-to-front
+  travel is raised and stays at X256 outside the bed; the wipe runs at
+  absolute G-code Z0, is configurable, and is enabled by default.
 - Raise the front-wipe target to an absolute 150 C.
 
 ### Timelapse controls

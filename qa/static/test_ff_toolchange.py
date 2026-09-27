@@ -98,3 +98,19 @@ def test_status_command_is_exposed_as_a_mainsail_macro():
     assert "'FF_TOOLCHANGE_STATUS', self.cmd_TOOLCHANGE_STATUS" in module_source
     assert "[gcode_macro TOOLCHANGE_STATUS]" in config_source
     assert "    FF_TOOLCHANGE_STATUS" in config_source
+
+
+def test_chute_purges_use_the_front_right_lip_wipe():
+    config_source = CONFIG.read_text(encoding="utf-8")
+
+    assert "variable_lip_wipe_enabled: 1" in config_source
+    assert "variable_lip_wipe_z: 0.0" in config_source
+    assert "variable_lip_wipe_x_left: 263.0" in config_source
+    assert "variable_lip_wipe_x_right: 271.0" in config_source
+    assert "variable_lip_wipe_feed: 12000" in config_source
+    assert "[gcode_macro _NS_CHUTE_LIP_WIPE]" in config_source
+    assert "{% set wipe_z = ff.lip_wipe_z|float %}" in config_source
+    assert "G1 X{xr} Y{y0 + 7.0} F{ff.lip_wipe_feed}" in config_source
+    assert config_source.count("_NS_CHUTE_LIP_WIPE TOOL=") == 2
+    assert "variable_exit_x:" not in config_source
+    assert "variable_exit_y:" not in config_source
