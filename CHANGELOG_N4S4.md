@@ -130,6 +130,10 @@ to `/usr/data`.
   `ADAPTIVE_MESH` uses it for the initial tool because `PURGE_NEAR_OBJECT`
   follows; registered prime-tower jobs select it automatically on every real
   tool change. Other pickups retain the conservative normal retract.
+- The prepared initial pickup no longer restores XY to the last adaptive-mesh
+  probe point and no longer performs its partial pressure recovery there. It
+  stays raised and retracted until the following purge-line travel, preventing
+  a droplet on the final probed area.
 - Recovery and retract are configured separately. When the captured position
   is already on the prime tower, `restore_unretract` deliberately advances
   less filament and `restore_unretract_feed` advances it more slowly. For a
@@ -412,6 +416,10 @@ restore_unretract_feed: 200
 - `PURGE_NEAR_OBJECT` calculates the bounds of all registered print objects,
   selects a safe purge line within the build plate, and prints it inside the
   adaptively meshed area.
+- The startup purge line uses 10 mm total filament with a 3 mm stationary
+  lead-in instead of 25/8 mm. Most material is deposited while moving, which
+  avoids the former start blob and overly broad purge line. `E` and `LEAD`
+  remain independently adjustable from Orca's machine start G-code.
 
 ## Installation
 

@@ -1263,17 +1263,27 @@ class FFToolchange:
             current, _ = self._derive_current_tool()
             changed_tool = current != tool
             restore_xy = ('X' in restore_axis or 'Y' in restore_axis)
+            prepared_initial_pickup = (
+                current < 0 and self.purge_pickup_armed)
             no_tower_change = (current >= 0 and restore_xy
                                and self.prime_tower_geometry is None)
             skip_model_xy = (
-                current >= 0 and restore_xy
-                and (self.prime_tower_geometry is None
-                     or not self._position_is_in_prime_tower(resume)))
+                restore_xy
+                and (prepared_initial_pickup
+                     or (current >= 0
+                         and (self.prime_tower_geometry is None
+                              or not self._position_is_in_prime_tower(
+                                  resume)))))
             effective_restore_axis = restore_axis
             if skip_model_xy:
                 effective_restore_axis = ''.join(
                     axis for axis in restore_axis if axis not in 'XY')
-                if no_tower_change:
+                if prepared_initial_pickup:
+                    self.gcode.respond_info(
+                        "ff_toolchange: initial T%d pickup is followed by a"
+                        " purge line; skipping return to the final mesh point"
+                        % tool)
+                elif no_tower_change:
                     self.gcode.respond_info(
                         "ff_toolchange: T%d selected without a prime tower;"
                         " keeping the tool raised at the safe corridor for"

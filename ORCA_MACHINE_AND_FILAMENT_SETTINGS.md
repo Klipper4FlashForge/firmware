@@ -78,7 +78,7 @@ M109 S[nozzle_temperature_initial_layer] T[initial_extruder]
 ; inside the adaptively meshed area.
 ; ------------------------------------------------------------
 
-PURGE_NEAR_OBJECT GAP=12 MARGIN=16 Z=0.2 E=25 F={filament_max_volumetric_speed[initial_no_support_extruder]/2.4053*60}
+PURGE_NEAR_OBJECT GAP=12 MARGIN=16 Z=0.2 E=10 LEAD=3 F={filament_max_volumetric_speed[initial_no_support_extruder]/2.4053*60}
 
 ;start_gcode end
 ```

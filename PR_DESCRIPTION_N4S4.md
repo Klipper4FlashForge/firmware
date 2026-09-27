@@ -75,6 +75,9 @@ optimizer.
 - Use a stronger one-shot in-dock retract plus a short pressure-settling pause
   when the pickup is known to be followed by the startup purge line or a
   registered prime tower; retain the conservative retract elsewhere.
+- Keep that prepared initial tool raised and retracted instead of returning it
+  to the last adaptive-mesh probe point; travel directly onward to the startup
+  purge line.
 - Perform only a small, slow stationary recovery when the captured position is
   already inside the prime tower.
 - If a tool change was requested over a printed object, suppress restoration

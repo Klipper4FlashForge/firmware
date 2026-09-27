@@ -113,6 +113,8 @@ def test_purge_followed_pickups_use_a_one_shot_stronger_retract():
     assert "'G4 P%d' % self.purge_retract_dwell_ms" in module_source
     assert "purge_retract: 0.9" in config_source
     assert "purge_retract_dwell_ms: 250" in config_source
+    assert "prepared_initial_pickup" in module_source
+    assert "skipping return to the final mesh point" in module_source
     adaptive_mesh = config_source.split(
         "[gcode_macro ADAPTIVE_MESH]", 1
     )[1].split("[gcode_macro DEFINE_PRIME_TOWER_OBJECT]", 1)[0]
@@ -121,6 +123,13 @@ def test_purge_followed_pickups_use_a_one_shot_stronger_retract():
         "[gcode_macro _NS_BEFORE_PRINT]", 1
     )[1].split("[gcode_macro _NS_AFTER_PRINT]", 1)[0]
     assert "TOOLCHANGE_PREPARE_PICKUP ENABLE=0" in before_print
+    purge_line = config_source.split(
+        "[gcode_macro PURGE_NEAR_OBJECT]", 1
+    )[1]
+    assert "params.E|default(10)|float" in purge_line
+    assert "params.LEAD|default(3)|float" in purge_line
+    assert "G1 E{lead} F{feed}" in purge_line
+    assert "G1 X{x2} E{e - lead} F{feed}" in purge_line
 
 
 def test_chute_purges_use_the_front_right_lip_wipe():
