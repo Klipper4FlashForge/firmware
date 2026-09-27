@@ -1,6 +1,8 @@
 """Creator 5 toolchanger status regression tests."""
 
+import ast
 import importlib.util
+import re
 import types
 
 import pytest
@@ -105,6 +107,15 @@ def test_chute_purges_use_the_front_right_lip_wipe():
 
     assert "variable_lip_wipe_enabled: 1" in config_source
     assert "variable_clean_wipe_z_absolute: -0.9" in config_source
+    assert (
+        "variable_cooldown_pad_x_offsets: "
+        "[0.0, 1.0, 2.0, -4.0, -3.0, -2.0, -1.0]"
+    ) in config_source
+    assert (
+        "variable_cooldown_pad_y_offsets: "
+        "[0.0, 3.0, -4.0, -1.0, 2.0, 5.0, -2.0, 1.0, 4.0, -3.0]"
+    ) in config_source
+    assert "variable_cooldown_pad_index: 0" in config_source
     assert "variable_lip_wipe_z: 0.0" in config_source
     assert "variable_lip_wipe_x_left: 263.0" in config_source
     assert "variable_lip_wipe_x_right: 271.0" in config_source
@@ -112,9 +123,36 @@ def test_chute_purges_use_the_front_right_lip_wipe():
     assert "[gcode_macro _NS_CHUTE_LIP_WIPE]" in config_source
     assert "{% set wipe_z = ff.lip_wipe_z|float %}" in config_source
     assert "{% set wipe_z = ff.clean_wipe_z_absolute|float %}" in config_source
+    assert (
+        "SET_GCODE_VARIABLE MACRO=_FF_FILAMENT "
+        "VARIABLE=cooldown_pad_index"
+    ) in config_source
     assert "G1 X{xr} F{ff.clean_wipe_feed}" in config_source
     assert "G1 X{xl} Y{y0 + 1.0} F{ff.lip_wipe_feed}" in config_source
     assert "G1 X{xl} Y{y0 + 7.0} F{ff.lip_wipe_feed}" in config_source
     assert config_source.count("_NS_CHUTE_LIP_WIPE TOOL=") == 2
     assert "variable_exit_x:" not in config_source
     assert "variable_exit_y:" not in config_source
+
+
+def test_cooldown_pad_cycle_covers_every_safe_grid_point_once():
+    config_source = CONFIG.read_text(encoding="utf-8")
+
+    def value(name):
+        match = re.search(r"^variable_%s:\s*(.+)$" % name,
+                          config_source, re.MULTILINE)
+        assert match, "missing macro variable %s" % name
+        return ast.literal_eval(match.group(1))
+
+    x_offsets = value("cooldown_pad_x_offsets")
+    y_offsets = value("cooldown_pad_y_offsets")
+    count = len(x_offsets) * len(y_offsets)
+    points = [(x_offsets[index % len(x_offsets)],
+               y_offsets[index % len(y_offsets)])
+              for index in range(count)]
+
+    assert points[0] == (0.0, 0.0)
+    assert len(points) == 70
+    assert len(set(points)) == 70
+    assert {x for x, _y in points} == set(range(-4, 3))
+    assert {y for _x, y in points} == set(range(-4, 6))

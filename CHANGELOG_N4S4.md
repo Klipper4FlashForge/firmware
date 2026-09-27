@@ -278,6 +278,10 @@ restore_unretract_feed: 200
 - The following cooldown-pad park uses an independent absolute G-code height
   of `Z-0.9`. This reduces compression of the silicone pad compared with the
   previous raw-frame conversion, which produced approximately `Z-1.9`.
+- Cooldown locations cycle through all 70 points of a 1 mm grid around the
+  original `X266.5/Y13.8` position. The configured safe offsets cover
+  `X-4..+2` and `Y-4..+5`; the sequence begins at the original centre and
+  distributes successive cooldowns across both axes before repeating.
 - The movement is enabled by default with `_FF_FILAMENT` variable
   `lip_wipe_enabled: 1`; setting it to `0` keeps the safe raised route but
   skips lowering and zigzagging.

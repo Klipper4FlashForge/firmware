@@ -170,7 +170,9 @@ TOOLCHANGE_SET_MATERIAL_OFFSET VALUE=0.000
   travel is raised and stays at X256 outside the bed; the wipe runs at
   absolute G-code Z0, is configurable, and is enabled by default. The
   following cooldown-pad position is limited to absolute G-code Z-0.9 to
-  avoid pressing the nozzle unnecessarily deep into the silicone.
+  avoid pressing the nozzle unnecessarily deep into the silicone. Successive
+  cooldowns rotate through a measured 70-point safe grid so they do not wear
+  or heat the same spot repeatedly.
 - Raise the front-wipe target to an absolute 150 C.
 
 ### Timelapse controls
