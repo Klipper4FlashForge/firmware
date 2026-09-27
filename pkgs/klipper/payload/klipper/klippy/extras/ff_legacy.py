@@ -7,7 +7,7 @@
 # the moonraker API, and stamps the install so it never runs again.
 #
 # Deliberately NOT a klippy:ready handler: that would re-decide a
-# once-per-install chore on every ready, at the one moment klippy cannot know
+# once-per-printer migration on every ready, at the one moment klippy cannot know
 # whether the rest of the machine is up.
 #
 #   FF_IMPORT_FIRMWARE_CONFIG [DIR=/usr/data/firmwareRes/config] [APPLY=1]

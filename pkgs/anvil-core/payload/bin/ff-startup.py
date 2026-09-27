@@ -2,7 +2,7 @@
 # Everything that has to happen before HelixScreen, and the panel that says so.
 #
 # Run as two s6-rc oneshots, between klipper and the UI. Two jobs, only the
-# second once-per-install:
+# second once per printer migration:
 #
 #   EVERY BOOT   wait until the printer is genuinely up -- the toolhead boards
 #                handed over from their bootloaders, then klipper and moonraker
@@ -10,7 +10,8 @@
 #                Three of the four boards need a handshake before they answer
 #                and the heater board routinely costs klippy a restart or two.
 #   FIRST BOOT   carry this unit's factory calibration from firmwareExe's JSON
-#                into Klipper, then stamp the install so it never runs again.
+#                into Klipper, then stamp persistent state so no later firmware
+#                reinstall runs it again.
 #
 # ITS OWN PROGRAM rather than a klippy:ready hook, because klippy:ready fires
 # with moonraker possibly not yet listening, and a boot-time migration is a
@@ -22,7 +23,7 @@
 #   2. Wait for klippy and moonraker to be ready. If a board never answered,
 #      hand the boards over again and restart klippy, which is what reopening
 #      the port achieves.
-#   3. If the install is already stamped, stop -- the rest is the migration.
+#   3. If this printer is already stamped, stop -- the rest is the migration.
 #   4. Otherwise FF_IMPORT_FIRMWARE_CONFIG, then SAVE_CONFIG (which restarts
 #      klippy), wait for it to come back, and only then stamp.
 #
@@ -86,7 +87,7 @@ try:
 except ImportError:
     bringup = None
 
-STAMP = '/usr/data/anvil/.firmware-config-imported'
+STAMP = '/usr/data/anvil-data/.firmware-config-imported'
 JSON_DIR = '/usr/data/firmwareRes/config'
 MOONRAKER = 'http://127.0.0.1:7125'
 # How klipper is restarted: `s6-svc -wr -t` on its live servicedir. NOT s6-rc

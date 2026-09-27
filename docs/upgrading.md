@@ -50,11 +50,11 @@ not put user files there. See [Custom boot scripts](custom-scripts.md).
 
 The `.cfg` includes are wired up **for** you: `printer.base.cfg` ends with
 the seven `[include ff-*.cfg]` lines, so a flash brings the mod up by itself.
-Your `printer.cfg` is not touched. The factory dock and nozzle numbers are
-pulled in for you too: on the first boot after the flash, `[ff_legacy]` imports
-firmwareExe's per-unit JSON and persists it with its own `SAVE_CONFIG`, so
-Klipper restarts once, right after coming up — before the screen is on its
-feet. `TOOL_OFFSET_STATUS` afterwards should show a nozzle triple for every
+Your `printer.cfg` is not touched. When a printer first migrates from stock,
+`[ff_legacy]` imports firmwareExe's per-unit dock and nozzle numbers and
+persists them with `SAVE_CONFIG`, so Klipper restarts once before the screen is
+up. A persistent marker prevents firmware reinstalls from repeating that
+import. `TOOL_OFFSET_STATUS` afterwards should show a nozzle triple for every
 tool and no `NOT CALIBRATED`.
 
 The included files are the mod's, and every update overwrites them without

@@ -306,6 +306,22 @@ if [ -n "$MODTAR" ]; then
             mkdir -p $HELIX_KEEP
             cp -f $MODDIR/helixscreen/config/$f $HELIX_KEEP/$f
         done
+        # Releases before 2026-09-27 put the factory-calibration import marker
+        # inside $MODDIR. That made it an install artifact, so the wipe below
+        # deleted it and every firmware reinstall reconsidered the one-time
+        # import. Move an existing marker into persistent state before the
+        # first wipe performed by a fixed release. Never replace the durable
+        # marker: it belongs to the printer, not to a particular payload.
+        OLD_IMPORT_STAMP=$MODDIR/.firmware-config-imported
+        IMPORT_STAMP=/usr/data/anvil-data/.firmware-config-imported
+        if [ -f $OLD_IMPORT_STAMP ] && [ ! -e $IMPORT_STAMP ]; then
+            mkdir -p /usr/data/anvil-data
+            if cp -f $OLD_IMPORT_STAMP $IMPORT_STAMP; then
+                echo "factory calibration import marker migrated to $IMPORT_STAMP"
+            else
+                echo "!! could not preserve factory calibration import marker"
+            fi
+        fi
         # Remove the previous install outright, then extract into the empty
         # directory.
         #

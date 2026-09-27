@@ -45,6 +45,10 @@ both printer models or through every real-world workflow.
 
 ### Fixed
 
+- The factory XYZ calibration import marker now lives in persistent
+  `/usr/data/anvil-data` state, so reinstalling firmware does not reconsider
+  or repeat the stock-JSON import. Upgrading migrates the marker from its old
+  location before the payload tree is wiped.
 - An AFC toolchange (`T0`..`T3`) no longer shuts the printer down with
   "Timer too close" right after the grab. AFC wrote its statistics to
   Moonraker with blocking requests while the moves back to the print were
