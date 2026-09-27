@@ -280,8 +280,11 @@ restore_unretract_feed: 200
   previous raw-frame conversion, which produced approximately `Z-1.9`.
 - Cooldown locations cycle through all 70 points of a 1 mm grid around the
   original `X266.5/Y13.8` position. The configured safe offsets cover
-  `X-4..+2` and `Y-4..+5`; the sequence begins at the original centre and
-  distributes successive cooldowns across both axes before repeating.
+  `X-4..+2` and `Y-4..+5` and distribute successive cooldowns across both
+  axes without duplicates before repeating.
+- A pseudo-random starting point is derived from Klipper CPU time, current job
+  duration, and the active tool after every restart. The seed and sequence
+  counter live only in macro RAM; no per-cooldown flash write is performed.
 - The movement is enabled by default with `_FF_FILAMENT` variable
   `lip_wipe_enabled: 1`; setting it to `0` keeps the safe raised route but
   skips lowering and zigzagging.

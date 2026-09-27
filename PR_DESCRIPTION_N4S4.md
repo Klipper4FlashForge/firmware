@@ -171,8 +171,9 @@ TOOLCHANGE_SET_MATERIAL_OFFSET VALUE=0.000
   absolute G-code Z0, is configurable, and is enabled by default. The
   following cooldown-pad position is limited to absolute G-code Z-0.9 to
   avoid pressing the nozzle unnecessarily deep into the silicone. Successive
-  cooldowns rotate through a measured 70-point safe grid so they do not wear
-  or heat the same spot repeatedly.
+  cooldowns rotate through a measured 70-point safe grid from a runtime-based
+  pseudo-random starting point, so restarts do not repeatedly begin in the
+  centre and no persistent write is required.
 - Raise the front-wipe target to an absolute 150 C.
 
 ### Timelapse controls
