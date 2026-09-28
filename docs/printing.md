@@ -73,10 +73,10 @@ cooperate.
   before anything heats, homes or grabs, with the fix spelled out. Override
   only for bench tests:
   `SET_GCODE_VARIABLE MACRO=_FF_JOB VARIABLE=allow_uncalibrated VALUE=1`.
-* **Calibration moves are bounded.** The plate check gates both
-  calibration commands; the Z probe targets −3 by default (the app's own
-  station value) and, once a trigger height is known, stops 2 mm below it
-  instead of driving on.
+* **Calibration moves are bounded.** Before the under-bed station is
+  approached, the normal carriage probe must see its area at least 0.8 mm
+  below an interior bed point. The station Z probe targets −3 by default and,
+  once a trigger height is known, stops 2 mm below it instead of driving on.
 * **Implausible results are not saved.** A circle-fit residual above
   0.05 mm, or a nozzle-to-station gap (`nozzle_z − station_z`) outside
   1.5–5 mm, aborts the command with nothing staged. Thresholds are in

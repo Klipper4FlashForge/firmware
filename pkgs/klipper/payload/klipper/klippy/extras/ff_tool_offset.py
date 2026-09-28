@@ -58,6 +58,8 @@ PROBE_ACCEL = 100.0        # SET_VELOCITY_LIMIT ACCEL=100 while probing
 # test.json defaults (Config::initTestConfig) for the station start point.
 CYLINDER_X_DEFAULT = 28.5
 CYLINDER_Y_DEFAULT = 214.5
+PLATE_REFERENCE_X_DEFAULT = 155.0
+PLATE_REFERENCE_Y_DEFAULT = 130.0
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +106,11 @@ def fit_circle(points):
     residuals = [math.hypot(x - center_x, y - center_y) - radius
                  for x, y in points]
     return center_x, center_y, radius, residuals
+
+
+def plate_removed(reference_z, station_area_z, min_drop):
+    """Whether the uncovered station area is sufficiently below the bed."""
+    return reference_z - station_area_z >= min_drop
 
 
 def _solve3(matrix, rhs):
@@ -202,14 +209,30 @@ class FFToolOffset:
         # known; 0 disables.
         self.gap_min = config.getfloat('gap_min', 1.5)
         self.gap_max = config.getfloat('gap_max', 5.0)
-        # Plate check (empty carriage, before any nozzle descends): the
-        # station Z must not land more than plate_z_tolerance ABOVE the
-        # calibrated station_z -- one-sided, because a plate can only hold the
-        # probe high -- and a sideways probe must find the circle's edge. 0
-        # disables.
+        # Plate check (empty carriage, before the under-bed ESTOP is used):
+        # the normal carriage probe must see the station area sufficiently
+        # below a safe point in the bed interior. The removable plate spans
+        # both locations and makes them nearly level. 0 disables.
         self.plate_check = config.getboolean('plate_check', True)
-        self.plate_z_tolerance = config.getfloat('plate_z_tolerance', 0.8,
+        self.plate_reference_x = config.getfloat(
+            'plate_reference_x', PLATE_REFERENCE_X_DEFAULT)
+        self.plate_reference_y = config.getfloat(
+            'plate_reference_y', PLATE_REFERENCE_Y_DEFAULT)
+        # Consume the former option as a compatibility alias. Its old
+        # one-sided station-Z meaning is gone, but the default/unit are useful
+        # for the new height-delta threshold and existing overrides must not
+        # make Klipper reject the config as unknown after an upgrade.
+        legacy_plate_tolerance = config.getfloat('plate_z_tolerance', None,
                                                  above=0.)
+        default_min_drop = (0.8 if legacy_plate_tolerance is None
+                            else legacy_plate_tolerance)
+        self.plate_min_drop = config.getfloat('plate_min_drop',
+                                              default_min_drop,
+                                              above=0.)
+        self.calibration_temp = config.getfloat('calibration_temp', 200.0,
+                                                above=0.)
+        self.temperature_tolerance = config.getfloat(
+            'temperature_tolerance', 3.0, above=0.)
 
         # Station position measured with the empty carriage
         # (TOOL_LOCATE_SENSOR), autosaved here as station_x/y/z.
@@ -230,6 +253,7 @@ class FFToolOffset:
         for i in range(EXTRUDER_COUNT):
             self.tools.append(self.printer.load_object(config, 'ff_tool %d' % i))
         self.toolchange = None
+        self.probe = None
         self.last = {}
 
         self.gcode.register_command(
@@ -259,6 +283,11 @@ class FFToolOffset:
                 " exposed through the fork's [e_stop X|Y|Z])"
                 % (self.name, ", ".join(missing)))
         self.toolchange = self.printer.lookup_object('ff_toolchange', None)
+        self.probe = self.printer.lookup_object('probe', None)
+        if self.probe is None or not hasattr(self.probe, 'get_status'):
+            raise self.printer.config_error(
+                "%s: [probe] is required for the non-contact plate check"
+                % self.name)
 
     def _run(self, script):
         self.gcode.run_script_from_command(script)
@@ -511,57 +540,56 @@ class FFToolOffset:
             return nominal
         return max(nominal, expected - self.z_margin)
 
-    def _plate_check(self, gcmd):
-        """Empty-carriage look at the station before anything descends with
-        a nozzle.
+    def _normal_probe(self):
+        """Run the carriage probe and return its reported Z result."""
+        self._run('PROBE')
+        self._wait_moves()
+        status = self.probe.get_status(self.reactor.monotonic())
+        result = status.get('last_z_result')
+        if result is None:
+            raise FFToolOffsetError("carriage probe returned no Z result")
+        return float(result)
 
-        This is the ONLY guard that the build plate is off, and deliberately
-        so: it measures, where the PLATE_REMOVED=1 flag it replaced only
-        asked the operator to promise. The station's sensor sees the
-        circle's edge when nothing covers it; with the build plate on, the Z
-        probe lands on the sheet (or never triggers) and the sideways probe
-        finds no edge. Raises FFToolOffsetError either way, so nothing is
-        damaged and nothing is saved. Runs inside _with_accel_guard."""
+    def _plate_check(self, gcmd):
+        """Verify plate removal without touching the under-bed station.
+
+        The normal carriage probe samples the bed interior and the station
+        area. With the removable sheet installed it spans both locations,
+        so their heights are nearly equal. With it removed, the exposed
+        station area is recessed. No levelboard ESTOP move is made until
+        that drop has been observed."""
         cylinder_x, cylinder_y = self._cylinder()
-        expected_z = self.station[2] if self.station is not None else None
-        z_target = self._z_target_for(self.z_target, expected_z)
         self._enter_raw_frame()
         self._run('M400')
         self._run('G1 Z%.3f F%d' % (self.z_start, FEED_PASS1))
-        self._run('G1 X%.3f Y%.3f F%d'
-                  % (cylinder_x, cylinder_y, FEED_POSITION))
-        self._run('SET_VELOCITY_LIMIT ACCEL=%.0f' % self.probe_accel)
-        self._run('M400')
-        hint = (" -- is the build plate still on? Nothing has moved with"
-                " a nozzle. Remove the plate, or plate_check: False in"
-                " [ff_tool_offset] if you are sure.")
-        try:
-            station_z = self._estop(gcmd, 'Z', z_target)
-        except FFToolOffsetError as err:
-            raise FFToolOffsetError("plate check: station Z probe failed"
-                                    " (%s)%s" % (err, hint))
-        gcmd.respond_info("  plate check: station Z %.3f" % station_z)
-        if expected_z is not None \
-           and station_z > expected_z + self.plate_z_tolerance:
-            raise FFToolOffsetError(
-                "plate check: station Z %.3f is %.2f mm above the"
-                " calibrated %.3f%s"
-                % (station_z, station_z - expected_z, expected_z, hint))
-        self._run('G1 X%.3f Y%.3f F%d' % (cylinder_x, cylinder_y, FEED_PASS1))
-        self._run('G1 Z%.3f F%d' % (station_z + self.z_clear, FEED_PASS1))
+        self._run('G1 X%.3f Y%.3f F%d' % (
+            self.plate_reference_x, self.plate_reference_y, FEED_POSITION))
         self._run('M400')
         try:
-            edge_x = self._estop(gcmd, 'X', cylinder_x + self.probe_travel)
-        except FFToolOffsetError as err:
+            reference_z = self._normal_probe()
+            self._run('G1 Z%.3f F%d' % (self.z_start, FEED_PASS1))
+            self._run('G1 X%.3f Y%.3f F%d'
+                      % (cylinder_x, cylinder_y, FEED_POSITION))
+            self._run('M400')
+            station_area_z = self._normal_probe()
+        except self.printer.command_error as err:
             raise FFToolOffsetError(
-                "plate check: no circle edge within %.0f mm of the start"
-                " point (%s)%s" % (self.probe_travel, err, hint))
-        self._run('G1 X%.3f F%d' % (cylinder_x, FEED_PASS1))
+                "plate check: carriage probe failed (%s) -- plate removal"
+                " could not be verified; nothing has approached the"
+                " under-bed station" % err)
         self._run('G1 Z%.3f F%d' % (self.z_start, FEED_PASS1))
         self._run('M400')
-        gcmd.respond_info("  plate check: circle edge at X %.3f (%+.2f from"
-                          " the start point) -- plate is off"
-                          % (edge_x, edge_x - cylinder_x))
+        drop = reference_z - station_area_z
+        gcmd.respond_info(
+            "  plate check: bed %.3f, station area %.3f, drop %.3f"
+            % (reference_z, station_area_z, drop))
+        if not plate_removed(reference_z, station_area_z,
+                             self.plate_min_drop):
+            raise FFToolOffsetError(
+                "plate check: station area is only %.3f mm below the bed;"
+                " need at least %.3f mm -- remove the build plate"
+                % (drop, self.plate_min_drop))
+        gcmd.respond_info("  plate check: build plate is removed")
 
     def _run_plate_check(self, gcmd):
         """Park whatever is mounted, then _plate_check. Shared prologue of
@@ -687,7 +715,7 @@ class FFToolOffset:
 
     cmd_TOOL_CALIBRATE_TOOL_OFFSET_help = (
         "Measure the MOUNTED tool's nozzle position against the station "
-        "([SAVE=1] [PLATE_CHECK=1] [SAMPLES=] [SAMPLES_TOLERANCE=]"
+        "([SAVE=1] [PLATE_CHECK=1] [TEMP=200] [SAMPLES=] [SAMPLES_TOLERANCE=]"
         " [SAMPLES_TOLERANCE_RETRIES=] [SAMPLES_RESULT=]"
         " [SAMPLE_RETRACT_DIST=] [PROBE_SPEED=])")
 
@@ -709,6 +737,12 @@ class FFToolOffset:
                 " is the command that wants an empty carriage.)"
                 % (self.name, EXTRUDER_COUNT - 1))
         save = gcmd.get_int('SAVE', 1, minval=0, maxval=1)
+        temp = gcmd.get_float('TEMP', self.calibration_temp, above=0.)
+        if temp <= self.temperature_tolerance:
+            raise gcmd.error(
+                "%s: TEMP must be above temperature_tolerance %.1f"
+                % (self.name, self.temperature_tolerance))
+        tool_object = self.tools[tool]
         try:
             self._check_homed(gcmd)
             self._run_plate_check(gcmd)
@@ -735,7 +769,12 @@ class FFToolOffset:
             gcmd.respond_info("T%d: offset calibration, start %.3f, %.3f"
                               % (tool, x0, y0))
 
-            tool_object = self.tools[tool]
+            self._run('SET_HEATER_TEMPERATURE HEATER=%s TARGET=%.1f'
+                      % (tool_object.extruder_name, temp))
+            self._run('TEMPERATURE_WAIT SENSOR=%s MINIMUM=%.1f MAXIMUM=%.1f'
+                      % (tool_object.extruder_name,
+                         temp - self.temperature_tolerance,
+                         temp + self.temperature_tolerance))
             expected_z = (tool_object.nozzle[2]
                           if tool_object.calibrated() else None)
             if expected_z is None and self.station is not None:
@@ -764,10 +803,6 @@ class FFToolOffset:
             if save:
                 tool_object.set_nozzle(center_x, center_y, z_trigger)
 
-            # the app's exit block: heater off for the tool, Z15. By heater
-            # name, since M104 T<n> follows AFC's map.
-            self._run('SET_HEATER_TEMPERATURE HEATER=%s TARGET=0'
-                      % tool_object.extruder_name)
             self._run('G1 Z%.3f F%d' % (self.z_final, FEED_PASS1))
             self._run('M400')
             if save:
@@ -783,6 +818,11 @@ class FFToolOffset:
             self._restore_offset_frame(gcmd)
             self._report_diffs(gcmd, results)
         finally:
+            try:
+                self._run('SET_HEATER_TEMPERATURE HEATER=%s TARGET=0'
+                          % tool_object.extruder_name)
+            except self.printer.command_error:
+                pass
             # Both frames go back even when a probe raised: leaving the
             # G-code offset zeroed and the tool frame off puts Z=0 at the
             # eddy plane, ~3.2 mm into the plate, for whatever the

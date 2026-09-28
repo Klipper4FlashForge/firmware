@@ -12,13 +12,14 @@ and how those numbers reach a first layer, is
 
 ## Before you start
 
-1. **Take the PEI build plate off.** The station is below the bed plane; with
-   the sheet on, the Z probe stops on the sheet. You are not asked to promise
-   this — the plate check measures it, and refuses.
-2. **Clean every nozzle.** The calibration is exactly as good as the nozzles
-   are clean. A blob of filament on a nozzle is measured as part of the
-   nozzle.
-3. Tools cold and docked. Nothing here heats; there is no purge.
+1. **Take the PEI build plate off.** Before approaching the under-bed station,
+   the carriage probe compares the bed interior with the station area. It
+   refuses unless the station area is recessed, so a forgotten plate is never
+   used as the stop for the station probe.
+2. Remove large blobs from every nozzle. Each tool is measured at 200 C so
+   ordinary residue softens, but calibration does not purge or wipe it.
+3. Tools docked. Each tool heats immediately before its pass and is turned off
+   afterward, including when calibration fails.
 4. Klipper up, no print running.
 
 ---
@@ -31,29 +32,28 @@ SAVE_CONFIG              ; persists it, restarts Klipper
 ```
 
 `CALIBRATE_TOOL_OFFSETS` is klipper-toolchanger's documented entry point, so
-it is the name HelixScreen's wizard and other UIs look for. It expands to:
+it is the name HelixScreen's wizard and other UIs look for. It checks the
+plate once, measures the station once, then measures each tool at 200 C.
+Override that temperature with `TEMP=`.
 
 ```gcode
 TOOL_LOCATE_SENSOR                ; the reference, empty carriage
 {% for tool in printer.toolchanger.tool_numbers %}
     SELECT_TOOL T={tool}
-    TOOL_CALIBRATE_TOOL_OFFSET    ; measures whatever is mounted
+    TOOL_CALIBRATE_TOOL_OFFSET PLATE_CHECK=0
 {% endfor %}
 ```
 
-Run those by hand instead when you only want one tool:
+Select one tool through the same safe entry point:
 
 ```gcode
-TOOL_LOCATE_SENSOR       ; only if the station or bed was disturbed
-SELECT_TOOL T=2
-TOOL_CALIBRATE_TOOL_OFFSET
+CALIBRATE_TOOL_OFFSETS TOOL=2
 SAVE_CONFIG
 ```
 
-**Order is not optional.** `TOOL_LOCATE_SENSOR` must have run at least once
-(now or in an earlier session) before a tool pass can be sanity-checked: the
-gap guard that catches a mis-triggered Z needs `station_z` to compare
-against. Without it the tool pass still runs, with one fewer guard.
+The selected-tool form deliberately remeasures the station before T2, just as
+the all-tools form does. The low-level commands remain available for
+compatibility, but normal operation should use `CALIBRATE_TOOL_OFFSETS`.
 
 The last tool stays mounted when `CALIBRATE_TOOL_OFFSETS` finishes, so a
 `SHAPER_CALIBRATE` afterwards has mass on the carriage.
@@ -109,12 +109,10 @@ nozzle descends. A failed run leaves the previous calibration intact.
 
 | Message | What happened |
 |---|---|
-| `plate check: station Z probe failed (...) -- is the build plate still on?` | The Z probe never triggered. Nothing has moved with a nozzle. |
-| `plate check: station Z <z> is <d> mm above the calibrated <z0>` | The probe stopped high — on the sheet. The check is one-sided on purpose: a plate can only hold the probe high, so a *low* reading is never a plate. |
-| `plate check: no circle edge within 14 mm of the start point` | The sideways probe found no bore. Either the plate is on, or the start point is far enough off that the bore is out of reach. |
+| `plate check: station area is only <d> mm below the bed; need at least 0.800 mm` | The two carriage-probe readings are nearly level, as they are when the removable sheet spans both locations. Remove it. |
+| `plate check: carriage probe failed (...)` | The non-contact comparison could not prove that the plate is absent, so calibration refused before approaching the under-bed station. |
 
-All three mean the same thing in practice: take the plate off and run it
-again.
+Both failures occur before the under-bed ESTOP probe or a hot nozzle is used.
 
 ### The probe misbehaved
 

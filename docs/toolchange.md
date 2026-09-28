@@ -198,19 +198,16 @@ The nozzle XY/Z offset calibration is the touchscreen's own sequence
 [`docs/notes/45-tool-offset-calibration.md`](notes/45-tool-offset-calibration.md)
 and [`46-offset-calibration-recovered.md`](notes/46-offset-calibration-recovered.md)),
 constants included. **Take the PEI sheet off first** — the calibration
-station sits below the bed plane. Nothing asks you to promise that: both
-commands park the carriage and *measure* it, probing the station Z with the
-bare carriage (it must not land more than 0.8 mm **above** the calibrated
-`station_z` — the check is one-sided, since a plate can only hold the probe
-high) and sweeping sideways for the circle's edge. A plate left on lands
-the Z probe high and has no edge, so the command refuses before any nozzle
-descends (`PLATE_CHECK=0` or `plate_check: False` skips it). Home, then:
+station sits below the bed plane. The check parks the tool and uses the normal
+carriage probe at the bed interior and above the station. A plate spans both
+points and makes their heights nearly equal; with it removed, the station
+area must be at least 0.8 mm lower. The command therefore refuses before the
+under-bed ESTOP sensor is approached (`PLATE_CHECK=0` or
+`plate_check: False` skips it). Then run:
 
 ```gcode
-CALIBRATE_TOOL_OFFSETS   ; or, by hand:
-TOOL_LOCATE_SENSOR       ; empty carriage, parks the mounted tool for you
-SELECT_TOOL T=0
-TOOL_CALIBRATE_TOOL_OFFSET   ; measures whatever is on the carriage
+CALIBRATE_TOOL_OFFSETS          ; station, then every tool at 200 C
+CALIBRATE_TOOL_OFFSETS TOOL=2   ; station, then T2 only
 SAVE_CONFIG
 ```
 
@@ -223,9 +220,13 @@ absolutes per tool, so recalibrating one tool leaves the others valid;
 `nozzle_z − station_z` is the ~3.2 mm gap the print-start Z offset uses.
 Re-run `TOOL_LOCATE_SENSOR` whenever the station or bed is disturbed.
 
-`CALIBRATE_TOOL_OFFSETS` runs both passes in one command. It is
+`CALIBRATE_TOOL_OFFSETS` checks the plate and measures the station once, then
+passes `PLATE_CHECK=0` to each requested tool so that work is not repeated.
+Each nozzle is heated to 200 C, waited within 3 C, held hot through the two
+passes, and always turned off afterward. `TEMP=` overrides 200 C. It is
 klipper-toolchanger's documented entry point, so it is the name HelixScreen's
-setup wizard and other UIs look for — the two commands above are what it calls.
+setup wizard and other UIs look for. The low-level commands remain available
+for compatibility and diagnostics.
 [`calibration.md`](calibration.md) is the operator's walkthrough: the order,
 the expected output, and every refusal the commands can raise.
 

@@ -19,6 +19,11 @@ both printer models or through every real-world workflow.
 
 ### Changed
 
+- XYZ tool calibration now verifies plate removal with two non-contact
+  carriage-probe readings before approaching the under-bed station, performs
+  that check only once per run, and measures each nozzle at 200 C. Use
+  `CALIBRATE_TOOL_OFFSETS TOOL=<n>` for a station plus one-tool run; `TEMP=`
+  overrides the calibration temperature.
 - AFC is updated to its 2026-09-16 DEV revision and multiple mapping is
   enabled: several slicer T-numbers can now select the same physical head.
   AFC now performs its own Moonraker writes off Klipper's reactor, replacing

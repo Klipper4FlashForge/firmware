@@ -80,7 +80,9 @@ since 2026-08-25 the first-boot import is driven from outside klippy by
   `nozzle_z`/`station_z` → refuse before heating/homing/grabbing, with the fix spelled out.
   Escape hatch for tests: `SET_GCODE_VARIABLE MACRO=_FF_JOB VARIABLE=allow_uncalibrated VALUE=1`.
 - `TOOL_CALIBRATE_TOOL_OFFSET` / `TOOL_LOCATE_SENSOR` are gated by the
-  plate check, not by an operator flag; default `z_target`
+  non-contact two-point carriage-probe plate check, not by an operator flag;
+  `CALIBRATE_TOOL_OFFSETS` runs it with the station pass and skips it for each
+  following tool; default `z_target`
   is −3 (the app's station pass-2 value) not −5; once a trigger height is known (calibrated
   `nozzle_z`/`station_z`, or `station_z + ~3.25` for a first tool pass) the Z probe stops
   `z_margin` (2 mm) below it.
@@ -103,7 +105,8 @@ store pass 2 `(cx, cy, zP2)` raw. Station: start `(cylinder_x, cylinder_y)`, sec
 Deliberate divergences (documented in the cfg): accel stays 100 for the whole run and is
 restored to the pre-run limit; optional `max_residual`/`min_radius`/`max_radius` guards; pass-2
 points use the 3-decimal-rounded centre actually commanded; `fit_circle` is the centroid-shifted
-`fitCircleStable` (identical result for 4 axis-aligned points); homing is required, not done.
+`fitCircleStable` (identical result for 4 axis-aligned points); homing is automatic; tool passes
+heat to 200 C (or `TEMP=`), wait within 3 C, and turn the heater off on every exit.
 
 ## Verified (mock harness, not in repo)
 
