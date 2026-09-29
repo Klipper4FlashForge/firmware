@@ -1588,6 +1588,16 @@ class FFToolchange:
         self.changing = True
         try:
             self._ensure_homed('xy')
+            bed_mesh = self.printer.lookup_object('bed_mesh', None)
+            if (bed_mesh is not None and bed_mesh.get_mesh() is not None
+                    and 'z' not in self.printer.lookup_object('toolhead').get_status(
+                        self.reactor.monotonic())['homed_axes']):
+                # Mesh compensation turns dock XY travel into Z motion, which
+                # is forbidden before Z homing. Leave it clear even if parking
+                # fails; restoring it would make the next attempt unsafe.
+                self._run('BED_MESH_CLEAR')
+                gcmd.respond_info("TOOLCHANGE_PARK: cleared active bed mesh"
+                                  " because Z is unhomed")
             self._release(current)
             if resume is not None:
                 self._restore_position(restore_axis, resume)
