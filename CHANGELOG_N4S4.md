@@ -1,6 +1,10 @@
 # Creator 5 N4S4 – Change Log
 
-Last updated: 2026-09-27
+Last updated: 2026-09-30
+
+- OrcaSlicer's automatic Prime Tower brim (`-1`) is now resolved from the
+  generated brim paths. This prevents print-start aborts and keeps the exact
+  outer brim bounds covered by Adaptive Mesh.
 
 This document describes the local changes compared with the original
 FlashForge/Klipper4FlashForge implementation. All printer paths are relative

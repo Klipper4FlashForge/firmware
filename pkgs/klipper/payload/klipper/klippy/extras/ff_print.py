@@ -217,6 +217,9 @@ def _parse_metadata(path):
     else:
         type_marker = -1
     block = head[type_marker:brim_marker] if type_marker >= 0 else None
+    brim_end_marker = head.find('; WIPE_TOWER_BRIM_END', brim_marker)
+    brim_block = (head[brim_marker:brim_end_marker]
+                  if brim_marker >= 0 and brim_end_marker >= 0 else None)
     if block is None and metadata.get('prime_tower_x') is not None:
         # A large first object can push the first tower outline beyond the
         # bounded head buffer. Stream until the first brim instead of loading
@@ -236,6 +239,25 @@ def _parse_metadata(path):
         except Exception:
             logging.exception(
                 "ff_print: cannot scan prime-tower outline in '%s'", path)
+    if brim_block is None and metadata.get('prime_tower_x') is not None:
+        # The automatic-brim sentinel is resolved only in the generated
+        # moves. If those moves lie beyond the bounded head buffer, collect
+        # the first brim block with a small streaming scan.
+        try:
+            candidate = None
+            with open(path, 'rb') as fh:
+                for raw_line in fh:
+                    line = raw_line.decode('utf-8', 'replace')
+                    if '; WIPE_TOWER_BRIM_START' in line:
+                        candidate = [line]
+                    elif candidate is not None:
+                        if '; WIPE_TOWER_BRIM_END' in line:
+                            brim_block = ''.join(candidate)
+                            break
+                        candidate.append(line)
+        except Exception:
+            logging.exception(
+                "ff_print: cannot scan prime-tower brim in '%s'", path)
     if block is not None:
         points = []
         current_x = current_y = None
@@ -277,6 +299,49 @@ def _parse_metadata(path):
             metadata['prime_tower_core_max_x'] = max(world_x)
             metadata['prime_tower_core_min_y'] = min(world_y)
             metadata['prime_tower_core_max_y'] = max(world_y)
+
+            # Orca uses -1 for "automatic" prime-tower brim. Resolve that
+            # sentinel from the actual emitted brim paths. The scalar value
+            # is the largest local expansion, making toolchange avoidance
+            # conservative; exact world bounds keep adaptive mesh tight.
+            if metadata.get('prime_tower_brim', 0.) < 0.:
+                brim_points = []
+                current_x = current_y = None
+                for line in (brim_block or '').splitlines():
+                    if re.match(r'^G[01]\b', line) is None:
+                        continue
+                    x_match = re.search(r'\bX([-+0-9.]+)', line)
+                    y_match = re.search(r'\bY([-+0-9.]+)', line)
+                    if x_match is not None:
+                        current_x = float(x_match.group(1))
+                    if y_match is not None:
+                        current_y = float(y_match.group(1))
+                    if (x_match is not None or y_match is not None) and \
+                            current_x is not None and current_y is not None:
+                        brim_points.append((current_x, current_y))
+                if brim_points:
+                    brim_local = [(cos_a * x + sin_a * y,
+                                   -sin_a * x + cos_a * y)
+                                  for x, y in brim_points]
+                    brim_local_x = [point[0] for point in brim_local]
+                    brim_local_y = [point[1] for point in brim_local]
+                    expansions = (
+                        min(local_x) - min(brim_local_x),
+                        max(brim_local_x) - max(local_x),
+                        min(local_y) - min(brim_local_y),
+                        max(brim_local_y) - max(local_y),
+                    )
+                    metadata['prime_tower_brim'] = max(
+                        0., max(expansions))
+                    brim_world_x = [point[0] for point in brim_points]
+                    brim_world_y = [point[1] for point in brim_points]
+                    metadata['prime_tower_outer_min_x'] = min(brim_world_x)
+                    metadata['prime_tower_outer_max_x'] = max(brim_world_x)
+                    metadata['prime_tower_outer_min_y'] = min(brim_world_y)
+                    metadata['prime_tower_outer_max_y'] = max(brim_world_y)
+                else:
+                    # Never pass Orca's negative sentinel to Klipper.
+                    metadata['prime_tower_brim'] = 0.
 
     return metadata
 
@@ -359,6 +424,14 @@ class FFPrint:
                 'prime_tower_core_min_y'),
             'prime_tower_core_max_y': self.metadata.get(
                 'prime_tower_core_max_y'),
+            'prime_tower_outer_min_x': self.metadata.get(
+                'prime_tower_outer_min_x'),
+            'prime_tower_outer_max_x': self.metadata.get(
+                'prime_tower_outer_max_x'),
+            'prime_tower_outer_min_y': self.metadata.get(
+                'prime_tower_outer_min_y'),
+            'prime_tower_outer_max_y': self.metadata.get(
+                'prime_tower_outer_max_y'),
         }
 
     def _resolve(self, gcmd, cmd):
