@@ -102,17 +102,19 @@ def test_status_command_is_exposed_as_a_mainsail_macro():
     assert "    FF_TOOLCHANGE_STATUS" in config_source
 
 
-def test_purge_followed_pickups_use_a_one_shot_stronger_retract():
+def test_purge_and_first_tower_pickups_use_stronger_retract():
     module_source = MODULE.read_text(encoding="utf-8")
     config_source = CONFIG.read_text(encoding="utf-8")
 
     assert "'TOOLCHANGE_PREPARE_PICKUP'" in module_source
     assert "self.purge_pickup_armed = False" in module_source
-    assert "or self.prime_tower_geometry is not None" in module_source
-    assert "purge_expected=purge_expected" in module_source
+    assert "self.job_tool_mask & (1 << tool)" in module_source
+    assert "return self.tower_repeat_retract, False" in module_source
     assert "'G4 P%d' % self.purge_retract_dwell_ms" in module_source
     assert "purge_retract: 0.9" in config_source
     assert "purge_retract_dwell_ms: 250" in config_source
+    assert "tower_repeat_retract: 0.0" in config_source
+    assert "TOOLCHANGE_BEGIN_JOB" in config_source
     assert "prepared_initial_pickup" in module_source
     assert "skipping return to the final mesh point" in module_source
     adaptive_mesh = config_source.split(
@@ -131,6 +133,43 @@ def test_purge_followed_pickups_use_a_one_shot_stronger_retract():
     assert "params.LEAD|default(3)|float" in purge_line
     assert "G1 E{lead} F{feed}" in purge_line
     assert "G1 X{x2} E{e - lead} F{feed}" in purge_line
+
+
+def test_repeat_tower_pickup_does_not_stack_another_retract(ff_toolchange):
+    toolchanger = types.SimpleNamespace(
+        purge_retract=0.9,
+        restore_retract=0.4,
+        tower_repeat_retract=0.0,
+        prime_tower_geometry=object(),
+        job_tool_mask=1 << 2,
+    )
+
+    select = ff_toolchange.FFToolchange._pickup_retract
+    assert select(toolchanger, 1) == (0.9, True)
+    assert select(toolchanger, 2) == (0.0, False)
+    assert select(toolchanger, 2, explicit_purge=True) == (0.9, True)
+
+    toolchanger.prime_tower_geometry = None
+    assert select(toolchanger, 2) == (0.4, False)
+
+
+def test_return_prime_never_exceeds_actual_dock_retract(ff_toolchange):
+    scripts = []
+    toolchanger = types.SimpleNamespace(
+        restore_unretract=0.4,
+        restore_unretract_feed=200,
+        restore_z_hop=0.0,
+        restore_z_feed=1200,
+        restore_feed=30000,
+        _run=scripts.append,
+    )
+
+    ff_toolchange.FFToolchange._restore_position(
+        toolchanger, "XY", [10.0, 20.0, 1.0],
+        prepare_toolchange_travel=True, return_retract=0.2)
+
+    assert "G1 E0.200 F200" in scripts
+    assert "G1 E0.400 F200" not in scripts
 
 
 def test_start_purge_preheats_the_next_tool_during_current_cleanup():

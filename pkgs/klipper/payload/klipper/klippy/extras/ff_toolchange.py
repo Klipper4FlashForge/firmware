@@ -327,6 +327,11 @@ class FFToolchange:
             'purge_retract', self.restore_retract, minval=0.)
         self.purge_retract_dwell_ms = config.getint(
             'purge_retract_dwell_ms', 0, minval=0)
+        # Orca has already retracted a previously used tool before parking
+        # it. Do not stack the full first-pickup retract on every subsequent
+        # trip from the dock to a registered prime tower.
+        self.tower_repeat_retract = config.getfloat(
+            'tower_repeat_retract', 0., minval=0.)
         # The return prime may deliberately be shorter and slower than the
         # dock retract.  The remaining pressure deficit is then filled by
         # the slicer's moving prime-tower extrusion instead of forming a
@@ -392,6 +397,10 @@ class FFToolchange:
         # the initial tool selected by ADAPTIVE_MESH in single-colour jobs;
         # prime-tower jobs are detected automatically below.
         self.purge_pickup_armed = False
+        # Tools successfully selected since TOOLCHANGE_BEGIN_JOB. This lets
+        # a prime-tower job distinguish a first hot pickup from a tool whose
+        # previous Orca unload already left it retracted in the dock.
+        self.job_tool_mask = 0
 
         self.gcode.register_command(
             'TOOLCHANGE', self.cmd_TOOLCHANGE, desc=self.cmd_TOOLCHANGE_help)
@@ -419,6 +428,9 @@ class FFToolchange:
             'TOOLCHANGE_PREPARE_PICKUP',
             self.cmd_TOOLCHANGE_PREPARE_PICKUP,
             desc=self.cmd_TOOLCHANGE_PREPARE_PICKUP_help)
+        self.gcode.register_command(
+            'TOOLCHANGE_BEGIN_JOB', self.cmd_TOOLCHANGE_BEGIN_JOB,
+            desc=self.cmd_TOOLCHANGE_BEGIN_JOB_help)
         self.gcode.register_command(
             'TOOL_Z_ADJUST', self.cmd_TOOL_Z_ADJUST,
             desc=self.cmd_TOOL_Z_ADJUST_help)
@@ -868,36 +880,44 @@ class FFToolchange:
         local_y = -sin_a * dx + cos_a * dy
         return abs(local_x) <= hx and abs(local_y) <= hy
 
-    def _retract_in_dock(self, purge_expected=False):
+    def _pickup_retract(self, tool, explicit_purge=False):
+        """Return (distance, dwell) for this tool's next dock departure."""
+        if explicit_purge:
+            return self.purge_retract, True
+        if self.prime_tower_geometry is not None:
+            if self.job_tool_mask & (1 << tool):
+                return self.tower_repeat_retract, False
+            return self.purge_retract, True
+        return self.restore_retract, False
+
+    def _retract_in_dock(self, retract, dwell=False):
         """Retract the newly locked tool before it leaves its dock.
 
         The main lock macro is synchronous (STEPPER_LOCK ends in M400), so
         the tool and its electrical contacts are seated when this is called.
         Borrow relative-E mode without changing the slicer's E coordinate.
-        Return whether an unretract is owed at the restored position.
+        Return the actual retract distance owed at the restored position.
         """
-        retract = (self.purge_retract if purge_expected
-                   else self.restore_retract)
         if retract <= 0.:
-            return False
+            return 0.
         extruder = self.printer.lookup_object('toolhead').get_extruder()
         eventtime = self.reactor.monotonic()
         if not extruder.get_status(eventtime)['can_extrude']:
             self.gcode.respond_info(
                 "ff_toolchange: in-dock retract skipped because the"
                 " mounted tool is below minimum extrusion temperature")
-            return False
+            return 0.
         self._run('SAVE_GCODE_STATE NAME=_ff_dock_retract')
         try:
             self._run('M83')
             self._run('G1 E-%.3f F%d'
                       % (retract,
                          self.restore_retract_feed))
-            if purge_expected and self.purge_retract_dwell_ms > 0:
+            if dwell and self.purge_retract_dwell_ms > 0:
                 self._run('G4 P%d' % self.purge_retract_dwell_ms)
         finally:
             self._run('RESTORE_GCODE_STATE NAME=_ff_dock_retract')
-        return True
+        return retract
 
     def _raise_before_docking(self, pos):
         """Raise the mounted nozzle before crossing the print toward a dock.
@@ -918,7 +938,7 @@ class FFToolchange:
             self._run('RESTORE_GCODE_STATE NAME=_ff_dock_zhop')
 
     def _restore_position(self, axes, pos, prepare_toolchange_travel=False,
-                          return_retracted=False):
+                          return_retract=0.):
         """Put the toolhead back where the change found it.
 
         A GCODE position is captured and replayed, not a machine one, so it
@@ -942,8 +962,8 @@ class FFToolchange:
                            for i, letter in enumerate('XY') if letter in axes)
         prepare_travel = prepare_toolchange_travel and bool(xy_move)
         do_zhop = prepare_travel and self.restore_z_hop > 0.
-        do_unretract = (prepare_travel and return_retracted
-                        and self.restore_unretract > 0.)
+        unretract = min(return_retract, self.restore_unretract)
+        do_unretract = prepare_travel and unretract > 0.
         # The sequence has already put the modal state back; borrow it and
         # return it rather than leaving G90 and the restore feed behind.
         self._run('SAVE_GCODE_STATE NAME=_ff_restore_axis')
@@ -964,7 +984,7 @@ class FFToolchange:
                 # and logical E coordinate.
                 self._run('M83')
                 self._run('G1 E%.3f F%d'
-                          % (self.restore_unretract,
+                          % (unretract,
                              self.restore_unretract_feed))
             if 'Z' in axes:
                 self._run('G1 Z%.3f F%d' % (pos[2], self.restore_feed))
@@ -1019,10 +1039,10 @@ class FFToolchange:
 
     # ---------------- grab ----------------
 
-    def _grab(self, tool, retract_in_dock=False, purge_expected=False):
+    def _grab(self, tool, retract_in_dock=False, retract=0., dwell=False):
         """Port of CommMgr::doGrabExtruderLatest @0x7a8190."""
         dock_x, dock_y = self._dock(tool)
-        return_retracted = False
+        return_retract = 0.
 
         # Precheck: the target must be detected in its dock (20 x 50 ms).
         # No motion at all on failure.
@@ -1068,8 +1088,8 @@ class FFToolchange:
                         self._run('ACTIVATE_EXTRUDER EXTRUDER=%s'
                                   % self._extruder_name(tool))
                         self._sync_shared_extruder_stepper(tool)
-                        return_retracted = self._retract_in_dock(
-                            purge_expected=purge_expected)
+                        return_retract = self._retract_in_dock(
+                            retract, dwell=dwell)
                     # The pullback feed is the app's literal F4800
                     # (@0x7a9074), NOT the calibrated slow feed.
                     self._run('G1 X%.3f F%d'
@@ -1117,7 +1137,7 @@ class FFToolchange:
             # sensors become the live ones (the app does this 3 s later
             # from a thread; here the grab moves are already complete).
             self._arm_runout(tool)
-            return return_retracted
+            return return_retract
 
     # ---------------- release ----------------
 
@@ -1296,11 +1316,11 @@ class FFToolchange:
             prepare_return = (resume is not None
                               and (not skip_model_xy or travel_preparation))
             if current != tool:
-                # Consume the explicit hint exactly once.  A registered
-                # prime tower independently makes every real pickup safe for
-                # the stronger retract because moving tower extrusion follows.
-                purge_expected = (self.purge_pickup_armed
-                                  or self.prime_tower_geometry is not None)
+                # Consume the explicit hint exactly once. For a registered
+                # tower, only the first pickup keeps the stronger retract;
+                # later pickups rely on Orca's preceding unload retract.
+                retract, retract_dwell = self._pickup_retract(
+                    tool, explicit_purge=self.purge_pickup_armed)
                 self.purge_pickup_armed = False
                 if current >= 0:
                     if prepare_return:
@@ -1308,14 +1328,14 @@ class FFToolchange:
                     self._release(current)
                 # _grab activates the extruder and applies the tool offsets,
                 # as the app does inside doGrabExtruderLatest.
-                return_retracted = self._grab(
+                return_retract = self._grab(
                     tool, retract_in_dock=prepare_return,
-                    purge_expected=purge_expected)
+                    retract=retract, dwell=retract_dwell)
                 if no_tower_change and self.no_tower_prime_macro:
                     self._run('%s TOOL=%d'
                               % (self.no_tower_prime_macro, tool))
             else:
-                return_retracted = False
+                return_retract = 0.
                 # Same tool re-selected: still re-activate and re-apply, so
                 # the first Tn after a RESTART (which wiped the gcode
                 # offsets) does not leave the mounted tool offset-less. Both
@@ -1325,6 +1345,7 @@ class FFToolchange:
                 self._sync_shared_extruder_stepper(tool)
                 self._set_tool_frame(tool)
                 self._arm_runout(tool)
+            self.job_tool_mask |= 1 << tool
             # No channel to announce. FlashForge's virtual_sdcard tracked one
             # so it could rewrite bare M104/M109 and SET_PRESSURE_ADVANCE per
             # channel. Upstream needs none: both apply to the ACTIVE extruder,
@@ -1333,7 +1354,7 @@ class FFToolchange:
                 self._restore_position(
                     effective_restore_axis, resume,
                     prepare_toolchange_travel=changed_tool,
-                    return_retracted=return_retracted)
+                    return_retract=return_retract)
         except FFToolchangeError as err:
             raise gcmd.error(str(err))
         except self.printer.command_error:
@@ -1605,6 +1626,12 @@ class FFToolchange:
         self.purge_pickup_armed = bool(
             gcmd.get_int('ENABLE', 1, minval=0, maxval=1))
 
+    cmd_TOOLCHANGE_BEGIN_JOB_help = (
+        "Reset per-job tool pickup state before pre-print cleaning")
+
+    def cmd_TOOLCHANGE_BEGIN_JOB(self, gcmd):
+        self.job_tool_mask = 0
+
     cmd_TOOL_Z_ADJUST_help = (
         "Per-tool Z correction, applied live: TOOL_Z_ADJUST TOOL=<0..3> "
         "(ADJUST=<+/-mm> | VALUE=<mm>) [SAVE=1 to also persist]")
@@ -1849,6 +1876,10 @@ class FFToolchange:
             lines.append("  prime tower: center %.3f,%.3f half-size"
                          " %.3fx%.3f rotation %.1f"
                          % (cx, cy, hx, hy, rotation))
+        seen = ["T%d" % tool for tool in range(EXTRUDER_COUNT)
+                if self.job_tool_mask & (1 << tool)]
+        lines.append("  tools selected this job: %s"
+                     % (", ".join(seen) if seen else "none"))
         for i, sensor in enumerate(self.dock_sensors):
             try:
                 lines.append("  T%d in dock (%s): %s"

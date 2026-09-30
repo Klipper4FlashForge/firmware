@@ -2,6 +2,10 @@
 
 Last updated: 2026-09-30
 
+- Repeated Prime Tower pickups now rely on Orca's existing unload retract
+  instead of stacking another 0.9 mm firmware retract. First and explicitly
+  prepared pickups retain the stronger anti-ooze retract, and any return
+  prime is capped to the amount actually retracted.
 - OrcaSlicer's automatic Prime Tower brim (`-1`) is now resolved from the
   generated brim paths. This prevents print-start aborts and keeps the exact
   outer brim bounds covered by Adaptive Mesh.
