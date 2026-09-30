@@ -2,14 +2,6 @@
 
 Last updated: 2026-09-30
 
-- Repeated Prime Tower pickups now rely on Orca's existing unload retract
-  instead of stacking another 0.9 mm firmware retract. First and explicitly
-  prepared pickups retain the stronger anti-ooze retract, and any return
-  prime is capped to the amount actually retracted.
-- OrcaSlicer's automatic Prime Tower brim (`-1`) is now resolved from the
-  generated brim paths. This prevents print-start aborts and keeps the exact
-  outer brim bounds covered by Adaptive Mesh.
-
 This document describes the local changes compared with the original
 FlashForge/Klipper4FlashForge implementation. All printer paths are relative
 to `/usr/data`.
@@ -130,14 +122,25 @@ to `/usr/data`.
   filament strings on the way to the prime tower.
 - Retract distance and speed are configurable through `restore_retract` and
   `restore_retract_feed`.
-- Pickups that are known to be followed by extrusion on a purge line or a
-  registered prime tower use the separate `purge_retract` distance. A short
-  `purge_retract_dwell_ms` pause lets nozzle pressure settle before the tool
-  starts leaving its dock.
-- `TOOLCHANGE_PREPARE_PICKUP` arms this stronger retract for one real pickup.
+- Pickups that are known to be followed by extrusion on a purge line, and the
+  first pickup of each tool in a registered prime-tower job, use the separate
+  `purge_retract` distance. A short `purge_retract_dwell_ms` pause lets nozzle
+  pressure settle before the tool starts leaving its dock.
+- Later pickups of a tool in the same prime-tower job use
+  `tower_repeat_retract` (default `0.0`, no additional retract). Orca has
+  already retracted that tool with its own unload retract before parking it,
+  and stacking the full `purge_retract` on top of it left a pressure deficit
+  that could cause holes at the aligned tower seam after a tool change.
+- `TOOLCHANGE_PREPARE_PICKUP` arms the stronger retract for one real pickup.
   `ADAPTIVE_MESH` uses it for the initial tool because `_PURGE_NEAR_OBJECT`
-  follows; registered prime-tower jobs select it automatically on every real
-  tool change. Other pickups retain the conservative normal retract.
+  follows. Prime-tower jobs select it automatically for a tool's first pickup
+  only; other pickups retain the conservative normal retract.
+- `TOOLCHANGE_BEGIN_JOB`, called from `_NS_BEFORE_PRINT` before any cleaning
+  pickup, resets the per-job record of tools that have already been selected.
+  `TOOLCHANGE_STATUS` lists that record as "tools selected this job".
+- The return prime after a tool change is limited to the distance actually
+  retracted in the dock. A small non-zero `tower_repeat_retract` can therefore
+  never over-prime, and `0.0` adds neither a retract nor a return prime.
 - The prepared initial pickup no longer restores XY to the last adaptive-mesh
   probe point and no longer performs its partial pressure recovery there. It
   stays raised and retracted until the following purge-line travel, preventing
@@ -160,6 +163,7 @@ to `/usr/data`.
 - `restore_retract_feed`
 - `purge_retract`
 - `purge_retract_dwell_ms`
+- `tower_repeat_retract`
 - `restore_unretract`
 - `restore_unretract_feed`
 
@@ -216,6 +220,20 @@ preserved.
   depth, centre, and world-coordinate bounds. For the two four-strip test
   files this correctly resolves a 28 x 14 mm core rather than the former
   assumed 28 x 28 mm square.
+- Orca writes `prime_tower_brim_width = -1` for its automatic brim. The real
+  brim exists only in the emitted moves, so the parser reads the first
+  `WIPE_TOWER_BRIM_START` … `WIPE_TOWER_BRIM_END` block, rotates its points
+  into the tower's local frame, and exposes the largest expansion beyond the
+  core outline as `printer.ff_print.prime_tower_brim`. The exact world-
+  coordinate bounds of the brim are exposed as `prime_tower_outer_min_x`,
+  `prime_tower_outer_max_x`, `prime_tower_outer_min_y` and
+  `prime_tower_outer_max_y`. If the brim block lies beyond the bounded head
+  buffer, a small streaming scan collects it. A missing or empty brim block
+  resolves to `0`, so the negative sentinel no longer reaches Klipper, where
+  it previously aborted print start. If the core outline itself cannot be
+  parsed the sentinel stays unresolved in the metadata, and the clamp in
+  `DEFINE_PRIME_TOWER_OBJECT` (see `printer_n4s4.cfg` below) keeps it from
+  being registered.
 
 ## `/usr/data/anvil-data/config/ff-print-macros.cfg`
 
@@ -265,6 +283,7 @@ restore_retract: 0.4
 restore_retract_feed: 1800
 purge_retract: 0.9
 purge_retract_dwell_ms: 250
+tower_repeat_retract: 0.0
 restore_unretract: 0.4
 restore_unretract_feed: 200
 ```
@@ -282,10 +301,14 @@ restore_unretract_feed: 200
   X position at 80 mm/s (`grab_retreat_feed: 4800`). This matches the tested
   release-retreat speed and replaces the previous 25 mm/s default.
 - Ordinary in-dock retract: 0.4 mm at 30 mm/s.
-- A pickup followed by the startup purge line or a registered prime tower
-  retracts 0.9 mm and waits 250 ms before leaving the dock. The existing
-  0.4 mm slow recovery leaves the final 0.5 mm pressure deficit for the
-  following moving purge extrusion instead of producing a stationary blob.
+- A pickup followed by the startup purge line, or a tool's first pickup in a
+  registered prime-tower job, retracts 0.9 mm and waits 250 ms before leaving
+  the dock. The existing 0.4 mm slow recovery leaves the final 0.5 mm pressure
+  deficit for the following moving purge extrusion instead of producing a
+  stationary blob.
+- Repeat pickups of a tool in the same prime-tower job add no firmware retract
+  (`tower_repeat_retract: 0.0`): Orca's own unload retract (2 mm in the tested
+  profile) is already in place, so the former stacked 2.9 mm total is avoided.
 - The Z-hop and in-dock retract remain active when restoration is suppressed.
   The configured 0.4 mm slow recovery is performed only when the captured
   position is inside the prime tower; outside it, pressure is recovered by
@@ -428,7 +451,11 @@ restore_unretract_feed: 200
   `ff_print.py` over the possibly incorrect multi-plate values substituted in
   Orca's custom start G-code, uses the measured second dimension, expands the
   real world-coordinate bounds by brim plus safety margin, and registers the
-  same corrected geometry with `ff_toolchange.py`.
+  same corrected geometry with `ff_toolchange.py`. A negative `BRIM` (Orca's
+  automatic-brim sentinel) is clamped to `0`, and when `ff_print.py` has
+  resolved the exact outer brim bounds those are used directly (plus the
+  safety margin) instead of the core bounds plus a scalar brim, so adaptive
+  mesh covers the real brim without over-sizing.
 - `_PURGE_NEAR_OBJECT` calculates the bounds of all registered print objects,
   selects a safe purge line within the build plate, and prints it inside the
   adaptively meshed area. Its leading underscore keeps this Orca-only helper
