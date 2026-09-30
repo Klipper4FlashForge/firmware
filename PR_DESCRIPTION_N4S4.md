@@ -23,6 +23,10 @@ optimizer.
   late.
 - Fast stationary pressure recovery at the prime tower could create a large
   blob.
+- Every pickup in a Prime Tower job received an additional 0.9 mm firmware
+  retract even when Orca had already parked that tool with a 2 mm unload
+  retract. With small Prime Volume values this stacked pressure deficit could
+  leave holes at the aligned wall seam after a tool change.
 - Dock travel did not consistently provide clearance over raised print lines.
 - The Creator 5 uses one physical extruder stepper with four logical
   extruders, which required explicit motion-queue synchronization and Klipper
@@ -73,8 +77,15 @@ optimizer.
   its dock, before pulling it into the build area.
 - Keep retract and recovery distances and speeds independently configurable.
 - Use a stronger one-shot in-dock retract plus a short pressure-settling pause
-  when the pickup is known to be followed by the startup purge line or a
-  registered prime tower; retain the conservative retract elsewhere.
+  for an explicitly prepared pickup or a tool's first pickup in a registered
+  Prime Tower job; retain the conservative retract elsewhere.
+- Reset and track the successfully selected tools for every print job. Once a
+  tool has already been used or prepared, subsequent Prime Tower pickups rely
+  on Orca's existing unload retract instead of stacking another 0.9 mm by
+  default. `TOOLCHANGE_STATUS` reports this per-job tool set.
+- Make the repeated-tower retract independently configurable and cap every
+  return prime to the amount actually retracted, preventing an over-prime
+  when a small non-zero repeated retract is selected.
 - Keep that prepared initial tool raised and retracted instead of returning it
   to the last adaptive-mesh probe point; travel directly onward to the startup
   purge line.
@@ -98,6 +109,7 @@ restore_retract: 0.4
 restore_retract_feed: 1800
 purge_retract: 0.9
 purge_retract_dwell_ms: 250
+tower_repeat_retract: 0.0
 restore_unretract: 0.4
 restore_unretract_feed: 200
 ```
@@ -112,6 +124,9 @@ restore_unretract_feed: 200
   `WIPE_TOWER_BRIM_START`, allowing rectangular towers instead of assuming
   `DEPTH=WIDTH`.
 - Expose the parsed tower geometry through `printer.ff_print`.
+- Treat Orca's `prime_tower_brim_width = -1` as its automatic-brim sentinel,
+  derive the effective brim from the emitted `WIPE_TOWER_BRIM` moves, and
+  expose the exact outer bounds. Never pass the negative sentinel to Klipper.
 - Register the corrected tower both as an exclude object for adaptive mesh
   bounds and with the toolchanger for position-restoration decisions.
 - Keep bounded head/tail reads and use a streaming fallback when the relevant
@@ -213,6 +228,8 @@ TOOLCHANGE_SET_MATERIAL_OFFSET VALUE=0.000
 - `pkgs/klipper-config/build.sh`
 - `pkgs/anvil-core/payload/bin/anvil-link-prog.sh`
 - `qa/static/test_n4s4_include_installer.py`
+- `qa/static/test_ff_print.py`
+- `qa/static/test_ff_toolchange.py`
 - `qa/static/test_timelapse_config.py`
 - `qa/replica/test_custom_scripts.py`
 - `CHANGELOG_N4S4.md`
@@ -260,6 +277,16 @@ offset setup used by this configuration.
 - Configuration files pass basic parser checks.
 - Prime-tower parsing was checked against multiple Orca G-code files from a
   two-plate project with different tower locations.
+- Automatic Prime Tower brim parsing was checked against an Orca file using
+  the `-1` sentinel; its emitted paths resolved to a 2.232 mm brim and exact
+  outer bounds without aborting print start.
+- Retract selection tests cover explicit purge pickups, first and repeated
+  Prime Tower pickups, ordinary no-tower pickups, and return-prime capping.
+- Comparing 25 and 30 mm³ Prime Volume jobs showed that the former emitted
+  about 21.31 mm³ for normal T2 tower priming and the latter about 28.23 mm³.
+  The previous 2.9 mm stacked filament retract corresponds to about 6.98 mm³,
+  matching that observed threshold; repeated pickups now avoid the additional
+  firmware retract.
 - The parser resolved the active plate's generated 28 x 14 mm tower instead
   of the incorrect first-plate placeholder and former 28 x 28 mm assumption.
 - Manual and automatic purge paths were exercised with consecutive tools.
