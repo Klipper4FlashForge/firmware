@@ -669,6 +669,18 @@ class FFToolchange:
     def _run(self, script):
         self.gcode.run_script_from_command(script)
 
+    def _stats_call(self, method, *args):
+        """Report to [ff_stats] when it is configured.  Statistics must never
+        break a toolchange, so a failure there only reaches the log."""
+        stats = self.printer.lookup_object('ff_stats', None)
+        if stats is None:
+            return None
+        try:
+            return getattr(stats, method)(*args)
+        except Exception:
+            logging.exception("ff_toolchange: ff_stats.%s failed", method)
+            return None
+
     def _wait_moves(self):
         # Equivalent of the app's M400 before sampling sensors.
         self.printer.lookup_object('toolhead').wait_moves()
@@ -1100,6 +1112,7 @@ class FFToolchange:
                 logging.info("ff_toolchange: grab attempt %d/%d for T%d"
                              " failed, backing off",
                              attempt + 1, GRAB_ATTEMPTS, tool)
+                self._stats_call('note_failed_attempt', 'grab', tool)
 
                 self._run('G1 X%.3f' % self.x_approach)
                 self._wait_moves()
@@ -1203,6 +1216,7 @@ class FFToolchange:
                         "ff_toolchange: release attempt %d/%d for T%d: tool"
                         " never read as seated, re-approaching",
                         attempt + 1, RELEASE_ATTEMPTS, tool)
+                    self._stats_call('note_failed_attempt', 'release', tool)
                     continue
 
                 for _ in range(RELEASE_RETRIES):
@@ -1213,6 +1227,8 @@ class FFToolchange:
                         logging.info(
                             "ff_toolchange: MOTOR_RELEASE endstop not"
                             " triggered for T%d, re-issuing", tool)
+                        self._stats_call('note_failed_attempt', 'release',
+                                         tool)
                 else:
                     continue
 
@@ -1273,9 +1289,18 @@ class FFToolchange:
                               or self.purge_retract > 0.)
         resume = (self._capture_position()
                   if restore_axis or travel_preparation else None)
+        # For [ff_stats]: the change is timed from the moment the motion that
+        # was already queued has finished, and a failure is filed under the
+        # stage it happened in.
+        stats_token = None
+        stats_stage = 'prepare'
+        stats_error = None
+        completed = False
+        current = None
         self.changing = True
         try:
             self._wait_moves()
+            stats_token = self._stats_call('toolchange_begin', tool)
             self._ensure_homed()
             # Strict derivation here: acting on a stale or ambiguous hint
             # would mean releasing the wrong tool -- moving to another tool's
@@ -1325,12 +1350,15 @@ class FFToolchange:
                 if current >= 0:
                     if prepare_return:
                         self._raise_before_docking(resume)
+                    stats_stage = 'release'
                     self._release(current)
                 # _grab activates the extruder and applies the tool offsets,
                 # as the app does inside doGrabExtruderLatest.
+                stats_stage = 'grab'
                 return_retract = self._grab(
                     tool, retract_in_dock=prepare_return,
                     retract=retract, dwell=retract_dwell)
+                stats_stage = 'finish'
                 if no_tower_change and self.no_tower_prime_macro:
                     self._run('%s TOOL=%d'
                               % (self.no_tower_prime_macro, tool))
@@ -1350,14 +1378,18 @@ class FFToolchange:
             # so it could rewrite bare M104/M109 and SET_PRESSURE_ADVANCE per
             # channel. Upstream needs none: both apply to the ACTIVE extruder,
             # which _grab has just set to this tool.
+            stats_stage = 'restore'
             if resume is not None:
                 self._restore_position(
                     effective_restore_axis, resume,
                     prepare_toolchange_travel=changed_tool,
                     return_retract=return_retract)
+            completed = True
         except FFToolchangeError as err:
+            stats_error = str(err)
             raise gcmd.error(str(err))
-        except self.printer.command_error:
+        except self.printer.command_error as err:
+            stats_error = str(err) or 'klipper command error'
             # A raw Klipper error escaped the sequence. The finally-clauses
             # restored accel, motor and modal state, but the gcode X/Y offsets
             # may still be zeroed and no tool offsets applied -- tell the
@@ -1369,6 +1401,12 @@ class FFToolchange:
             raise
         finally:
             self.changing = False
+            if stats_token is not None:
+                self._stats_call(
+                    'toolchange_end', stats_token, current, tool, completed,
+                    stats_stage,
+                    stats_error or (None if completed
+                                    else 'unexpected error'))
 
     def _reset_gcode_position(self):
         """Invalidate gcode_move's position cache after a frame change.

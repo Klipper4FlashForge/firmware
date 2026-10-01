@@ -471,13 +471,30 @@ class FFPrint:
             params.append('TOOLS=%s' % ','.join(
                 str(tool) for tool in self.metadata['tools']))
 
-        # Let the macro raise: a refusal here must stop the print BEFORE the
-        # base command loads and resumes the file.
-        self.gcode.run_script_from_command(
-            '%s %s' % (self.before_macro, ' '.join(params)))
-        # Arm the end latch only once prepare succeeded.
-        self.active = True
-        self.previous_handlers[cmd](gcmd)
+        self._stats('note_job_prepare', path, cmd)
+        try:
+            # Let the macro raise: a refusal here must stop the print BEFORE
+            # the base command loads and resumes the file.
+            self.gcode.run_script_from_command(
+                '%s %s' % (self.before_macro, ' '.join(params)))
+            # Arm the end latch only once prepare succeeded.
+            self.active = True
+            self.previous_handlers[cmd](gcmd)
+        except Exception as err:
+            self._stats('note_job_aborted', str(err))
+            raise
+
+    def _stats(self, method, *args):
+        """Tell [ff_stats], if configured, where a job starts and ends.  The
+        statistics must never decide whether a print runs, so a failure in
+        there only reaches the log."""
+        stats = self.printer.lookup_object('ff_stats', None)
+        if stats is None:
+            return
+        try:
+            getattr(stats, method)(*args)
+        except Exception:
+            logging.exception("ff_print: ff_stats.%s failed", method)
 
     def _handle_ready(self, print_time):
         """idle_timeout:ready fires whenever the queue drains -- including a
@@ -493,6 +510,7 @@ class FFPrint:
             return
         self.active = False
         self.end_state = state
+        self._stats('note_job_ending', state)
         # Run the macro from a timer, not from this event: the handler runs in
         # the idle_timeout timeout path and should not block on a G-code script.
         self.reactor.update_timer(self.end_timer, self.reactor.NOW)
@@ -503,6 +521,7 @@ class FFPrint:
             self.gcode.run_script('%s STATE=%s' % (self.after_macro, state))
         except Exception:
             logging.exception("ff_print: %s failed", self.after_macro)
+        self._stats('note_job_finalize')
         return self.reactor.NEVER
 
 
