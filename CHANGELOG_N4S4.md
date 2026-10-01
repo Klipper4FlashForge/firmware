@@ -188,6 +188,18 @@ preserved.
 - `TOOLCHANGE_STATUS` reports the total print Z correction and its base,
   plate, and material components separately.
 
+### Statistics hooks
+
+- `_toolchange` reports each change to `ff_stats` when that extra is
+  configured: it starts timing once the already-queued motion has finished,
+  remembers the stage it is in (`prepare`, `release`, `grab`, `finish`,
+  `restore`), and reports success or the failing stage when it ends.
+- `_grab` and `_release` report every attempt that did not succeed, so the
+  number of retries is known.
+- Without `[ff_stats]` nothing is reported and nothing changes. A failure
+  inside the statistics code is logged and ignored: it can never fail or
+  delay a tool change.
+
 ## `/usr/data/anvil/klipper/klippy/extras/ff_print.py`
 
 ### Used-tool discovery
@@ -234,6 +246,75 @@ preserved.
   parsed the sentinel stays unresolved in the metadata, and the clamp in
   `DEFINE_PRIME_TOWER_OBJECT` (see `printer_n4s4.cfg` below) keeps it from
   being registered.
+
+### Job boundaries for statistics
+
+- When a print is requested, `ff_print` tells `ff_stats` before the start
+  macro runs, reports a refused or failed start as `aborted`, reports the end
+  state as soon as `print_stats` leaves the printing state, and reports that
+  the end macro has finished. This is what lets a job include the start-up
+  and the end sequence, which Klipper's own `print_stats` does not cover.
+- Like the tool-change hooks, these calls do nothing without `[ff_stats]`
+  and cannot fail a print.
+
+## `/usr/data/anvil/klipper/klippy/extras/ff_stats.py`
+
+New file. User documentation: `docs/statistics.md`.
+
+### Statistics
+
+- Keeps lifetime and per-job statistics in
+  `/usr/data/anvil-data/stats/ff_stats.json`, outside `/usr/data/anvil`, so a
+  firmware update keeps them. The last 100 jobs are kept in detail.
+- **Jobs** run from the print request to the end of the end macro and end as
+  `completed`, `cancelled`, `error`, `aborted` (never started printing),
+  `shutdown` or `interrupted` (found open on disk after a power loss, or
+  Klipper stopped mid-job). A print that did not come through `ff_print` is
+  followed from the moment `print_stats` reports it printing.
+- **Print time** per job: Klipper's `print_duration` and the whole job time.
+- **Phases** divide the job time exactly: `prepare`, `homing`, `heating`,
+  `mesh`, `purge`, `toolchange`, `print`, `paused`, `end`. The innermost
+  phase wins. Homing uses Klipper's homing events; `toolchange` comes from
+  `ff_toolchange`; the rest are commands that `ff_stats` takes over at
+  `klippy:connect` (`M109`, `M190`, `M191`, `TEMPERATURE_WAIT`,
+  `BED_MESH_CALIBRATE`, the purge and wipe macros, `TOOLCHANGE_PARK`,
+  `FF_AFTER_PRINT_END`), using the same unregister-and-chain pattern as
+  `ff_print`. No macro is edited. The list is the `phase_commands` option.
+- **Filament** is measured per tool from the net movement of each extruder's
+  own `last_position`, between the job start and the end. This is independent
+  of `print_stats`, which re-bases the G-code E position on every
+  `ACTIVATE_EXTRUDER` and reported only 12% to 34% (median 25%) of the
+  slicer's estimate on this printer's ten completed multi-colour jobs
+  (single-tool jobs: median 1.02, eighteen jobs). Net means extruded minus
+  retracted; the start-up clean is included and shown separately. Grams use
+  the file header's `filament_density` and `filament_diameter`, else the
+  extruder diameter and the `filament_density` option.
+- **Tool changes**: swaps and first pickups, per target tool, with duration
+  (average and slowest), failed changes by stage, and failed grab/release
+  attempts. The duration excludes the short return travel to the print
+  position, which is queued without waiting.
+- With `correct_print_stats` (default on) `print_stats.filament_used` is
+  replaced by the measurement while a tracked job prints, so Mainsail's
+  dashboard and Moonraker's job history show the right figure for new jobs.
+- Written atomically, when a job ends, at shutdown, and otherwise at most
+  every 5 minutes (every minute during a job). `/usr/data` is mounted `sync`,
+  hence no write per event. An unreadable file is renamed to
+  `.corrupt-<time>` rather than overwritten; a file from an older layout is
+  filled in with the counters it lacks.
+- Console: `FF_STATS_SHOW WHAT=SUMMARY|JOB|JOBS [COUNT=]`, shown in Mainsail
+  through the macros `FF_STATS`, `FF_STATS_JOB` and `FF_STATS_JOBS`;
+  `FF_STATS_PHASE NAME= [END=1]` for custom macros; `FF_STATS_RESET CONFIRM=1`
+  keeps the old file as `ff_stats.json.reset-<time>`. The numbers are also in
+  `printer.ff_stats`.
+- Everything Klipper can call (event handlers, G-code handlers, the status)
+  is exception-safe: Klipper turns an exception in a G-code handler into a
+  printer shutdown, so a bug here fails only its own command.
+- Not included, possible follow-ups: per-nozzle hours at temperature and
+  heat cycles, and maintenance counters (axis travel, motor, bed and fan
+  hours, with reminders).
+- Not yet exercised on a printer: tested with unit tests and with a replica
+  test that runs it against Klipper's real `gcode.py` and `print_stats.py` on
+  the printer's interpreter.
 
 ## `/usr/data/anvil-data/config/ff-print-macros.cfg`
 
@@ -346,6 +427,12 @@ restore_unretract_feed: 200
 - It runs after every START_PURGE chute purge and after each tool's one-time
   fallback mini-purge in jobs without a prime tower. Manual `PURGE` with its
   default `WIPE=1` also uses it before cooling on the existing silicone pad.
+
+### Statistics
+
+- `[ff_stats]` loads the statistics extra with its defaults.
+- `FF_STATS`, `FF_STATS_JOB` and `FF_STATS_JOBS` (`COUNT=`) are macros, so
+  they are buttons in Mainsail and print to its console.
 
 ### Other pre-existing local changes
 

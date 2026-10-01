@@ -14,6 +14,9 @@ optimizer.
 
 ## Problems addressed
 
+- Klipper's `print_stats` reports only about a quarter of the filament a
+  multi-colour job uses, and nothing records tool changes, their duration and
+  failures, or where the time of a job goes.
 - After a tool change, the new tool could return to the position at which the
   previous object was last printed. This could lower the nozzle over an
   existing part and leave a blob before travelling to the prime tower.
@@ -212,8 +215,39 @@ TOOLCHANGE_SET_MATERIAL_OFFSET VALUE=0.000
 - Report an ignored frame only once per disabled session instead of once per
   layer.
 
+### Statistics
+
+- Add `ff_stats`, a Klipper extra that keeps lifetime and per-job statistics:
+  tool changes (swaps and first pickups, duration, failed changes by stage,
+  failed grab/release attempts), print time, filament measured per tool, and
+  the time of each job divided into phases (prepare, homing, heating, mesh,
+  purge, toolchange, print, paused, end).
+- Measure filament from each extruder's own running position. Klipper's
+  `print_stats` re-bases the G-code E position at every `ACTIVATE_EXTRUDER`
+  and reported 12% to 34% (median 25%) of the slicer's estimate on ten
+  completed multi-colour jobs, against a median of 1.02 on single-tool jobs.
+  `correct_print_stats` (default on) replaces `print_stats.filament_used`
+  with the measurement while a tracked job prints, which corrects Mainsail's
+  dashboard and Moonraker's job history for new jobs.
+- Phases come from Klipper's homing events, the tool-change code and a
+  configurable list of commands (`phase_commands`) that `ff_stats` wraps. No
+  macro is edited.
+- Show the numbers in Mainsail through the `FF_STATS`, `FF_STATS_JOB` and
+  `FF_STATS_JOBS` macros, and as `printer.ff_stats` for macros and Moonraker.
+  `FF_STATS_RESET CONFIRM=1` starts over and keeps the old file.
+- Persist to `/usr/data/anvil-data/stats/ff_stats.json` atomically, rarely
+  (the data partition is mounted `sync`), and recover a job left open by a
+  power loss as `interrupted`.
+- Hooks in `ff_print` and `ff_toolchange` are optional and exception-safe: a
+  fault in the statistics cannot fail a print or a tool change.
+- Possible follow-ups, deliberately not included: nozzle hours at
+  temperature and heat cycles, and maintenance counters (axis travel, motor,
+  bed and fan hours).
+- Documented in `docs/statistics.md`.
+
 ## Files changed
 
+- `/usr/data/anvil/klipper/klippy/extras/ff_stats.py`
 - `/usr/data/anvil/klipper/klippy/extras/ff_extruder.py`
 - `/usr/data/anvil/klipper/klippy/extras/ff_bed_mesh.py`
 - `/usr/data/anvil/klipper/klippy/extras/ff_toolchange.py`
@@ -229,9 +263,14 @@ TOOLCHANGE_SET_MATERIAL_OFFSET VALUE=0.000
 - `pkgs/anvil-core/payload/bin/anvil-link-prog.sh`
 - `qa/static/test_n4s4_include_installer.py`
 - `qa/static/test_ff_print.py`
+- `qa/static/test_ff_stats.py`
 - `qa/static/test_ff_toolchange.py`
 - `qa/static/test_timelapse_config.py`
 - `qa/replica/test_custom_scripts.py`
+- `qa/replica/test_ff_stats.py`
+- `docs/statistics.md`
+- `docs/how-a-print-runs.md`
+- `mkdocs.yml`
 - `CHANGELOG_N4S4.md`
 - `ORCA_MACHINE_AND_FILAMENT_SETTINGS.md`
 - `PR_DESCRIPTION_N4S4.md`
@@ -290,6 +329,12 @@ offset setup used by this configuration.
 - The parser resolved the active plate's generated 28 x 14 mm tower instead
   of the incorrect first-plate placeholder and former 28 x 28 mm assumption.
 - Manual and automatic purge paths were exercised with consecutive tools.
+- Statistics: unit tests cover jobs, phases, measured filament, the
+  `print_stats` correction, tool-change counting (including the real
+  `FFToolchange._toolchange` stage tracking), persistence, recovery and the
+  reports. A replica test runs `ff_stats` on the printer's interpreter against
+  Klipper's real `gcode.py` and `print_stats.py`. The statistics have not yet
+  run through a print on a printer.
 - Tool pickup, in-dock retract, Z-hop, prime-tower travel, material/build-plate
   Z composition, adaptive mesh selection, and timelapse suppression were
   exercised on a Creator 5 after a full firmware restart.
