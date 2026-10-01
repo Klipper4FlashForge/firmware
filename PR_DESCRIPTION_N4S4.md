@@ -269,6 +269,7 @@ TOOLCHANGE_SET_MATERIAL_OFFSET VALUE=0.000
 - `qa/replica/test_custom_scripts.py`
 - `qa/replica/test_ff_stats.py`
 - `docs/statistics.md`
+- `FEATURES_N4S4.md`
 - `docs/how-a-print-runs.md`
 - `mkdocs.yml`
 - `CHANGELOG_N4S4.md`
