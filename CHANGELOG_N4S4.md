@@ -312,9 +312,13 @@ New file. User documentation: `docs/statistics.md`.
 - Not included, possible follow-ups: per-nozzle hours at temperature and
   heat cycles, and maintenance counters (axis travel, motor, bed and fan
   hours, with reminders).
-- Not yet exercised on a printer: tested with unit tests and with a replica
-  test that runs it against Klipper's real `gcode.py` and `print_stats.py` on
-  the printer's interpreter.
+- Tested with unit tests, with a replica test that runs it against Klipper's
+  real `gcode.py` and `print_stats.py` on the printer's interpreter, and on a
+  Creator 5: on two completed four-colour jobs the measured filament, minus
+  the start-up clean, was within 0.6 % of the slicer's per-tool lengths for
+  every tool and 0.3 % above its total; the corrected `print_stats` figure
+  read 100.3 % and 100.4 % of the slicer's total. A cancelled job and one
+  refused tool change (printer not homed) were filed correctly.
 
 ## `/usr/data/anvil-data/config/ff-print-macros.cfg`
 

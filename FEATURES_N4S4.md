@@ -332,7 +332,10 @@ Each has its evidence level.
    12% to 34% (median 25%, 10 jobs). Klipper re-bases the G-code E position
    on every `ACTIVATE_EXTRUDER` (`gcode_move._handle_activate_extruder`), which
    is the likely cause; it has not been isolated further. Moonraker's job
-   history and Mainsail's dashboard both show this value.
+   history and Mainsail's dashboard both show this value. Example: a one-hour
+   job with 225 tool changes recorded 1432.7 mm against the slicer's
+   6235.8 mm (23 %), before the correction; two later four-colour jobs read
+   100.3 % and 100.4 % with it.
 2. **`RESTART` does not reload changed Python modules.** `klippy.py` restarts
    in the same process, so a changed `ff_*.py` needs a reboot (or a restart of
    the service) while config changes and brand-new modules do not.
@@ -358,13 +361,31 @@ Each has its evidence level.
   composition, adaptive mesh selection, timelapse suppression, and the manual
   and automatic purge paths with consecutive tools. The automatic-brim parser
   was checked against an Orca file using the `-1` sentinel.
-- **Statistics, first hardware results (2026-10-01):** the module loads, the
+- **Statistics, hardware results (2026-10-01):** the module loads, the
   macros print, tool changes are counted per type with durations, a change
   that was refused because the printer was not yet homed was filed as a
-  failure at stage `prepare` with its message, and the corrected filament
-  figure follows the running job. A first multi-colour job was still running
-  when this was written, so the main check — measured filament per tool
-  against the slicer's per-tool weights — is **still open**.
+  failure at stage `prepare` with its message, a cancelled job is filed as
+  `cancelled`, and the corrected filament figure follows the running job.
+  The main check is done on two completed four-colour jobs (100 layers,
+  3 tool changes each): the measured filament per tool, minus the 49.2 mm
+  start-up clean of each tool, against the `; filament used [mm]` line of
+  the sliced file.
+
+  | Tool | Job 1 slicer | Job 1 measured | Job 2 slicer | Job 2 measured |
+  |---|---|---|---|---|
+  | T0 | 1469.67 mm | 1478.77 mm (+0.6 %) | 309.65 mm | 308.05 mm (−0.5 %) |
+  | T1 | 438.85 mm | 438.77 mm (0.0 %) | 458.15 mm | 458.15 mm (0.0 %) |
+  | T2 | 457.22 mm | 457.22 mm (0.0 %) | 457.22 mm | 457.22 mm (0.0 %) |
+  | T3 | 368.58 mm | 367.10 mm (−0.4 %) | 1591.76 mm | 1601.02 mm (+0.6 %) |
+  | Total | 2734.32 mm | 2741.86 mm (+0.3 %) | 2816.78 mm | 2824.45 mm (+0.3 %) |
+
+  Every tool is within 0.6 % of the slicer, and the total is 0.3 % above it
+  in both jobs. The tool that prints most reads about 9 mm high each time;
+  the cause is not isolated. Both jobs counted 3 swaps and 5 pickups, which
+  matches the file's `total filament change = 3`; a change took 3.7 s on
+  average over the 34 so far, 5.9 s at most. Mainsail's own figure for the
+  same two jobs, now corrected, reads 100.3 % and 100.4 % of the slicer's
+  total. This is two jobs on one printer, not a series.
 - **Tool-change times** exclude the short return travel to the print
   position, and phase times can be a couple of seconds early because Klipper
   processes G-code ahead of the motion.

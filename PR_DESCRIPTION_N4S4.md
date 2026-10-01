@@ -334,8 +334,12 @@ offset setup used by this configuration.
   `print_stats` correction, tool-change counting (including the real
   `FFToolchange._toolchange` stage tracking), persistence, recovery and the
   reports. A replica test runs `ff_stats` on the printer's interpreter against
-  Klipper's real `gcode.py` and `print_stats.py`. The statistics have not yet
-  run through a print on a printer.
+  Klipper's real `gcode.py` and `print_stats.py`.
+- Statistics on a Creator 5: on two completed four-colour jobs the measured
+  filament, minus the start-up clean, was within 0.6 % of the slicer's
+  per-tool lengths for every tool and 0.3 % above its total; the corrected
+  `print_stats` figure read 100.3 % and 100.4 % of the slicer's total, against
+  23 % on an earlier job with 225 tool changes. Two jobs on one printer.
 - Tool pickup, in-dock retract, Z-hop, prime-tower travel, material/build-plate
   Z composition, adaptive mesh selection, and timelapse suppression were
   exercised on a Creator 5 after a full firmware restart.

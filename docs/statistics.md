@@ -132,10 +132,17 @@ diameter and the `filament_density` option (1.24, PLA).
 **Check this against the slicer.** On this printer's four-colour test jobs,
 Klipper's own `filament_used` came out at 12% to 34% of the slicer's estimate
 (median 25%, ten completed jobs), while single-tool jobs matched it (median
-1.02, eighteen jobs). The measurement here does not use that figure. It has
-not yet been compared with a real multi-colour print, which is the check to
-make first: print one job and compare `FF_STATS_JOB` with the slicer's
-per-tool weights.
+1.02, eighteen jobs). The measurement here does not use that figure.
+
+It was compared with the slicer on two completed four-colour test jobs (100
+layers, 3 tool changes each). With the start-up clean taken off, every tool
+was within 0.6 % of the `; filament used [mm]` line in the sliced file, and
+the total was 0.3 % above it in both. The tool that printed most read about
+9 mm high each time; the cause has not been found. Mainsail's own figure for
+those jobs, corrected, read 100.3 % and 100.4 % of the slicer's total, where
+an earlier job with 225 tool changes had read 23 %. That is two jobs on one
+printer. To check your own, print a job and compare `FF_STATS_JOB` with the
+per-tool lengths the slicer shows.
 
 ### Tool changes
 
