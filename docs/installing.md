@@ -134,6 +134,10 @@ Check that `ssh root@<printer-ip>` works before you go any further. That shell
 is how you get in when the screen is dark, and it is worth confirming while
 everything is still fine.
 
+If you would rather log in with a key than type the password, see [Logging in
+with an ssh key](ssh-keys.md). It is optional, and it takes a few edits on the
+printer.
+
 ---
 
 ## What it changes on the printer
