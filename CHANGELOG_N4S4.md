@@ -566,8 +566,14 @@ restore_unretract_feed: 200
 ## Installation
 
 After changing the Python modules or configuration, copy the changed files to
-the printer paths listed above. Then run `FIRMWARE_RESTART` or reboot the
-printer.
+the printer paths listed above. Keep a copy of each file you replace.
+
+A configuration change takes effect after `RESTART` or `FIRMWARE_RESTART`.
+A change to a Python module does not: Klipper restarts inside the same
+process and keeps the modules it already imported, so `RESTART` loads a
+brand-new module (such as `ff_stats.py`) but still runs the old version of
+one that was loaded before (`ff_print.py`, `ff_toolchange.py`, ...). After
+changing an existing module, reboot the printer.
 
 The matching Orca machine-start and filament-profile snippets are documented
 in `ORCA_MACHINE_AND_FILAMENT_SETTINGS.md`; that guide is not copied to the
