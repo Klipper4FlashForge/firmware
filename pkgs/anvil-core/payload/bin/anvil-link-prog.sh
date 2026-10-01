@@ -262,7 +262,9 @@ restore_stock_chelper
 # ONCE, and never again: after this, $CONFIG_DIR is the live config and
 # $STOCK_CONFIG is left as the machine had it, untouched from here on.
 # Re-seeding would overwrite an owner's printer.cfg with a stale one on every
-# update.
+# update. The one migration below removes FlashForge's DC24V_CTL output_pin;
+# printer.base.cfg now owns that hardware as a heater_fan, and leaving both
+# definitions would make Klipper refuse the duplicate eheaterboard:PA3 pin.
 #
 # The mod's own .cfg files are NOT copied: they are symlinked in below, so an
 # `apk upgrade` changes what Klipper reads without going near this directory.
@@ -308,6 +310,14 @@ if [ ! -f "$CONFIG_DIR/printer.cfg" ]; then
     fi
 fi
 mkdir -p "$CONFIG_DIR"
+
+# FlashForge 1.9.9 may have written [output_pin DC24V_CTL] into the live file.
+# printer.base.cfg now owns PA3 as a heater_fan, so remove the obsolete section
+# before Klipper sees two objects claiming the same pin.
+if [ -f "$MODDIR/bin/anvil-migrate-printer-config.sh" ]; then
+    /bin/sh "$MODDIR/bin/anvil-migrate-printer-config.sh" \
+        "$CONFIG_DIR/printer.cfg"
+fi
 
 # Klipper resolves [include] against the directory of the file doing the
 # including -- configfile.py: `dirname = os.path.dirname(source_filename)`,
