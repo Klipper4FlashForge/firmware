@@ -74,11 +74,36 @@ ADAPTIVE_MESH TOOL=[initial_extruder] NOZZLE=[nozzle_temperature_initial_layer] 
 M109 S[nozzle_temperature_initial_layer] T[initial_extruder]
 
 ; ------------------------------------------------------------
-; Print the purge line close to the current print objects and
-; inside the adaptively meshed area.
+; Nozzle-dependent startup purge line.
+;
+; 0.25 mm: reduced pressure and material
+; 0.40 mm: current tested values
+; 0.60 mm: more material and greater line height
+; 0.80 mm: still more material and greater line height
 ; ------------------------------------------------------------
 
-_PURGE_NEAR_OBJECT GAP=12 MARGIN=16 Z=0.2 E=10 LEAD=3 F={filament_max_volumetric_speed[initial_no_support_extruder]/2.4053*60}
+{if nozzle_diameter[initial_extruder] < 0.30}
+
+; 0.25 mm nozzle
+; Limit stationary extrusion to at most 6 mm3/s.
+_PURGE_NEAR_OBJECT GAP=12 MARGIN=16 Z=0.15 E=5 LEAD=1.5 F={min(filament_max_volumetric_speed[initial_no_support_extruder],6)/2.4053*60}
+
+{elsif nozzle_diameter[initial_extruder] < 0.50}
+
+; 0.40 mm nozzle
+_PURGE_NEAR_OBJECT GAP=12 MARGIN=16 Z=0.20 E=10 LEAD=3 F={filament_max_volumetric_speed[initial_no_support_extruder]/2.4053*60}
+
+{elsif nozzle_diameter[initial_extruder] < 0.70}
+
+; 0.60 mm nozzle
+_PURGE_NEAR_OBJECT GAP=12 MARGIN=16 Z=0.30 E=15 LEAD=4 F={filament_max_volumetric_speed[initial_no_support_extruder]/2.4053*60}
+
+{else}
+
+; 0.80 mm nozzle
+_PURGE_NEAR_OBJECT GAP=12 MARGIN=16 Z=0.40 E=20 LEAD=5 F={filament_max_volumetric_speed[initial_no_support_extruder]/2.4053*60}
+
+{endif}
 
 ;start_gcode end
 ```
@@ -92,6 +117,36 @@ The firmware reads the leading `M140` target before the file starts and begins
 bed heating before the initial `G28`. The normal startup callback deliberately
 defers its second Z home, mesh handling, initial-tool pickup, and print-offset
 setup to `ADAPTIVE_MESH`; this avoids homing and grabbing the same tool twice.
+
+### Nozzle-dependent startup purge line
+
+The start G-code selects the purge parameters from the nozzle diameter of the
+initial tool:
+
+| Nozzle | Line height `Z` | Total filament `E` | Stationary lead `LEAD` |
+| --- | ---: | ---: | ---: |
+| 0.25 mm | 0.15 mm | 5 mm | 1.5 mm |
+| 0.40 mm | 0.20 mm | 10 mm | 3 mm |
+| 0.60 mm | 0.30 mm | 15 mm | 4 mm |
+| 0.80 mm | 0.40 mm | 20 mm | 5 mm |
+
+The diameter of every installed nozzle must be configured correctly in Orca.
+This startup purge line uses `nozzle_diameter[initial_extruder]`, because it is
+printed only for the initial tool. Subsequent tools are primed by the Prime
+Tower during a multi-material print.
+
+The divisor `2.4053` is the cross-sectional area in mm² of 1.75 mm filament
+(`pi * (1.75 / 2)^2`). Dividing the filament profile's maximum volumetric flow
+in mm³/s by this area and multiplying by 60 converts it to the filament feed
+rate in mm/min expected by Klipper. For the 0.25 mm nozzle, the stationary
+lead-in is additionally capped at 6 mm³/s to limit pressure in the smaller
+nozzle.
+
+`_PURGE_NEAR_OBJECT` normally creates a line up to 50 mm long (25 mm on each
+side of its selected center). It may shorten the line to remain inside the
+available build area, with a minimum length of 20 mm. `E` is the total filament
+used by the macro: `LEAD` is extruded while stationary and the remainder is
+extruded during the XY move.
 
 Orca's **Printer settings > Multimaterial > Advanced > Preheat time** remains
 the source of normal in-print preheat scheduling. Orca emits an early `M104`

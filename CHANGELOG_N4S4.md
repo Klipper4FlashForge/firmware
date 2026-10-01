@@ -1,6 +1,6 @@
 # Creator 5 N4S4 – Change Log
 
-Last updated: 2026-09-30
+Last updated: 2026-10-01
 
 This document describes the local changes compared with the original
 FlashForge/Klipper4FlashForge implementation. All printer paths are relative
@@ -460,10 +460,16 @@ restore_unretract_feed: 200
   selects a safe purge line within the build plate, and prints it inside the
   adaptively meshed area. Its leading underscore keeps this Orca-only helper
   out of Mainsail's normal macro panel.
-- The startup purge line uses 10 mm total filament with a 3 mm stationary
-  lead-in instead of 25/8 mm. Most material is deposited while moving, which
-  avoids the former start blob and overly broad purge line. `E` and `LEAD`
-  remain independently adjustable from Orca's machine start G-code.
+- The documented Orca machine start G-code now selects startup purge-line
+  height, total extrusion, and stationary lead-in from the initial tool's
+  configured nozzle diameter. Presets cover 0.25, 0.40, 0.60, and 0.80 mm
+  nozzles; the tested 0.40 mm setup retains `Z=0.20`, `E=10`, and `LEAD=3`.
+- The 0.25 mm preset limits the stationary extrusion rate to 6 mm³/s. The
+  documentation also explains the `2.4053 mm²` cross-sectional-area conversion
+  from Orca's volumetric-flow limit to Klipper's filament feed rate.
+- Most purge material is deposited while moving, avoiding the former start
+  blob and overly broad purge line. `Z`, `E`, and `LEAD` remain independently
+  adjustable in Orca's machine start G-code.
 
 ## Installation
 
@@ -472,7 +478,8 @@ the printer paths listed above. Then run `FIRMWARE_RESTART` or reboot the
 printer.
 
 The matching Orca machine-start and filament-profile snippets are documented
-in `ORCA_Z_OFFSETS.md`; that guide is not copied to the printer.
+in `ORCA_MACHINE_AND_FILAMENT_SETTINGS.md`; that guide is not copied to the
+printer.
 
 ## `/usr/data/anvil-data/config/timelapse.cfg`
 
