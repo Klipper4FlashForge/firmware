@@ -350,8 +350,13 @@ restore_unretract_feed: 200
 ### Other pre-existing local changes
 
 - `[probe] samples: 1` reduces probing to one sample per point.
-- `[output_pin DC24V_CTL]` enables the shared 24 V hotend supply and switches
-  it off during shutdown.
+- The shared 24 V hotend supply (`eheaterboard:PA3`) is deliberately not
+  defined here. An earlier revision carried its own `[output_pin DC24V_CTL]`
+  (always on, off at shutdown). That conflicts with `[heater_fan dc24v_ctl]`
+  in `printer.base.cfg`, which now owns the pin (on while any hotend has a
+  target or is above 50 °C, off on shutdown), and Klipper refuses to start
+  with both. A `printer.cfg` that still carries FlashForge's
+  `[output_pin DC24V_CTL]` is cleaned up by `anvil-link-prog.sh`.
 - `[extruder]` contains only the pin, gearing, and Pressure Advance settings
   for the shared physical extruder stepper.
 - `_BUILD_PLATE_OFFSETS` stores independent first-layer corrections for
