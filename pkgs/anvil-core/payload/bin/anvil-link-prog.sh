@@ -357,6 +357,29 @@ case "$MACHINE" in
         echo "link-prog:    leaving $CONFIG_DIR/printer.chamber.cfg as it is" >&2 ;;
 esac
 
+# N4S4's include installer must live in the persistent boot-script directory,
+# which is outside MODDIR and therefore cannot be carried directly inside
+# anvil.tar.xz. This linking pass runs both after a firmware payload is
+# extracted on the printer and from the klipper-config package postinst.
+# Install the current packaged copy atomically and stay quiet when it already
+# matches, preserving the small boot/install log footprint.
+_n4s4_src="$MODDIR/share/klipper-config/10-enable-printer-n4s4.sh"
+_n4s4_dir=/usr/data/anvil-data/scripts
+_n4s4_dst="$_n4s4_dir/10-enable-printer-n4s4.sh"
+if [ -f "$_n4s4_src" ]; then
+    if [ ! -f "$_n4s4_dst" ] || ! cmp -s "$_n4s4_src" "$_n4s4_dst"; then
+        mkdir -p "$_n4s4_dir"
+        _n4s4_tmp="$_n4s4_dst.anvil-new.$$"
+        if cp "$_n4s4_src" "$_n4s4_tmp" && chmod 0644 "$_n4s4_tmp" &&
+                mv -f "$_n4s4_tmp" "$_n4s4_dst"; then
+            echo "link-prog: installed $_n4s4_dst"
+        else
+            rm -f "$_n4s4_tmp"
+            echo "link-prog: !! could not install $_n4s4_dst" >&2
+        fi
+    fi
+fi
+
 # WHAT AN OLDER RELEASE LEFT IN $STOCK_CONFIG STAYS THERE. Those releases
 # symlinked printer.base.cfg and the ff-*.cfg into FlashForge's directory,
 # replacing the stock files, and nothing kept a copy of what they replaced --

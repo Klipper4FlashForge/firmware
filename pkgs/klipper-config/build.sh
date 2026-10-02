@@ -12,6 +12,7 @@ pkg_begin klipper-config || exit 0
 pkg_intree
 
 pkg_stage "$PKG_DIR/payload/config" "config"
+pkg_stage "$PKG_DIR/payload/scripts" "share/klipper-config"
 
 # A recipe that ships an empty directory is a recipe whose glob stopped
 # matching. pkg_ship would catch "config" vanishing entirely; this catches it
@@ -33,5 +34,5 @@ for _m in Creator5 Creator5Pro; do
         "klipper-config: no chamber/$_m.cfg -- anvil-link-prog.sh resolves this name from app_startup.sh"
 done
 
-pkg_ship "config"
+pkg_ship "config" "share/klipper-config"
 pkg_end
