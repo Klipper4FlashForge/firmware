@@ -24,6 +24,14 @@ both printer models or through every real-world workflow.
   default; nothing changes for a profile that does not call them.
 - `printer.ff_print` reports the active plate's prime tower: position, size,
   brim, rotation and measured outline.
+- Gentler return to the print after a tool change, for a printer that restores
+  X/Y (`restore_axis`): `restore_z_hop` raises the old tool before it crosses the
+  part and the new one travels back high, `restore_retract` pulls filament back
+  while the new tool is still seated in its dock so it does not string, and
+  `restore_unretract` gives part of it back at the target. All are zero as
+  shipped, which changes nothing. From
+  [#29](https://github.com/Klipper4FlashForge/firmware/pull/29), without its
+  prime-tower handling.
 - The shared-stepper adapter `ff_extruder.py`, for a printer whose four
   logical extruders repeat one physical stepper's options. It does nothing
   until a `[ff_extruder]` section is configured, and none is yet.

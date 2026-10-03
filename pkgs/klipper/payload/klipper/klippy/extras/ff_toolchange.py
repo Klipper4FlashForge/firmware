@@ -297,6 +297,29 @@ class FFToolchange:
         self.restore_axis = self._parse_axes(
             config.get('restore_axis', ''), config.error, 'restore_axis')
         self.restore_feed = config.getint('restore_feed', 9000, minval=1)
+        # Protection for the trip back to the restored X/Y after a real
+        # change, used only when restore_axis names X or Y. The old tool is
+        # raised restore_z_hop before it crosses the part to its dock; the
+        # new tool, still seated in its dock, retracts restore_retract of
+        # filament before it is pulled out so a hot nozzle does not drag an
+        # ooze string; and it travels at the raised Z, descends, then
+        # unretracts restore_unretract at the target. Raising and retracting
+        # are separate switches. All default to zero, which leaves the
+        # change exactly as it was.
+        self.restore_z_hop = config.getfloat('restore_z_hop', 0., minval=0.)
+        self.restore_z_feed = config.getint('restore_z_feed', 1200, minval=1)
+        self.restore_retract = config.getfloat(
+            'restore_retract', 0., minval=0.)
+        self.restore_retract_feed = config.getint(
+            'restore_retract_feed', 1800, minval=1)
+        # Less than the retract is deliberate: the slicer's own extrusion
+        # fills the rest while moving, instead of a blob from a stationary
+        # prime at the target.
+        self.restore_unretract = config.getfloat(
+            'restore_unretract', self.restore_retract, minval=0.,
+            maxval=self.restore_retract)
+        self.restore_unretract_feed = config.getint(
+            'restore_unretract_feed', self.restore_retract_feed, minval=1)
 
         # Sensor names.
         #  position buttons: one per tool, PRESSED == that tool is docked.
@@ -782,7 +805,55 @@ class FFToolchange:
         gcode_move = self.printer.lookup_object('gcode_move')
         return list(gcode_move.get_status()['gcode_position'])
 
-    def _restore_position(self, axes, pos):
+    def _travel_protected(self, axes):
+        """Does a change that restores `axes` raise, retract and unretract?"""
+        return (('X' in axes or 'Y' in axes)
+                and (self.restore_z_hop > 0. or self.restore_retract > 0.))
+
+    def _retract_in_dock(self):
+        """Retract the newly locked tool before it leaves its dock.
+
+        The lock macro is synchronous (STEPPER_LOCK ends in M400), so the
+        tool and its electrical contacts are seated when this is called.
+        Relative E is borrowed for the move, and RESTORE_GCODE_STATE keeps
+        the slicer's own E coordinate. Returns the distance retracted.
+        """
+        if self.restore_retract <= 0.:
+            return 0.
+        extruder = self.printer.lookup_object('toolhead').get_extruder()
+        if not extruder.get_status(
+                self.reactor.monotonic())['can_extrude']:
+            self.gcode.respond_info(
+                "ff_toolchange: in-dock retract skipped because the"
+                " mounted tool is below minimum extrusion temperature")
+            return 0.
+        self._run('SAVE_GCODE_STATE NAME=_ff_dock_retract')
+        try:
+            self._run('M83')
+            self._run('G1 E-%.3f F%d'
+                      % (self.restore_retract, self.restore_retract_feed))
+        finally:
+            self._run('RESTORE_GCODE_STATE NAME=_ff_dock_retract')
+        return self.restore_retract
+
+    def _raise_before_docking(self, pos):
+        """Raise the mounted nozzle before it crosses the print to its dock.
+
+        Z stays raised through the release and the grab; _restore_position
+        lowers it once the new tool is back over the target X/Y.
+        """
+        if self.restore_z_hop <= 0.:
+            return
+        self._run('SAVE_GCODE_STATE NAME=_ff_dock_zhop')
+        try:
+            self._run('G90')
+            self._run('G1 Z%.3f F%d'
+                      % (pos[2] + self.restore_z_hop, self.restore_z_feed))
+        finally:
+            self._run('RESTORE_GCODE_STATE NAME=_ff_dock_zhop')
+
+    def _restore_position(self, axes, pos, protected=False,
+                          return_retract=0.):
         """Put the toolhead back where the change found it.
 
         A GCODE position is captured and replayed, not a machine one, so it
@@ -791,7 +862,9 @@ class FFToolchange:
         the point of the parameter.
 
         X/Y first and Z last: descending before the carriage is over the
-        target would drag the nozzle across the part.
+        target would drag the nozzle across the part. With `protected` the
+        trip is made restore_z_hop higher, and the Z descent is followed by
+        the unretract of the filament pulled back in the dock.
 
         Restoring Z after a PARK is the one sharp edge. Parking zeroes the
         tool offsets, so the same G-code Z is a different machine Z -- by
@@ -802,13 +875,27 @@ class FFToolchange:
             return
         xy_move = ' '.join('%s%.3f' % (letter, pos[i])
                            for i, letter in enumerate('XY') if letter in axes)
+        hop = protected and bool(xy_move) and self.restore_z_hop > 0.
+        unretract = (min(return_retract, self.restore_unretract)
+                     if protected and xy_move else 0.)
         # The sequence has already put the modal state back; borrow it and
         # return it rather than leaving G90 and the restore feed behind.
         self._run('SAVE_GCODE_STATE NAME=_ff_restore_axis')
         try:
             self._run('G90')
+            if hop:
+                # The new tool's Z frame differs from the old one's, so the
+                # hop is applied again here rather than assumed.
+                self._run('G1 Z%.3f F%d'
+                          % (pos[2] + self.restore_z_hop, self.restore_z_feed))
             if xy_move:
                 self._run('G1 %s F%d' % (xy_move, self.restore_feed))
+            if hop:
+                self._run('G1 Z%.3f F%d' % (pos[2], self.restore_z_feed))
+            if unretract > 0.:
+                self._run('M83')
+                self._run('G1 E%.3f F%d'
+                          % (unretract, self.restore_unretract_feed))
             if 'Z' in axes:
                 self._run('G1 Z%.3f F%d' % (pos[2], self.restore_feed))
         finally:
@@ -862,9 +949,13 @@ class FFToolchange:
 
     # ---------------- grab ----------------
 
-    def _grab(self, tool):
-        """Port of CommMgr::doGrabExtruderLatest @0x7a8190."""
+    def _grab(self, tool, retract_in_dock=False):
+        """Port of CommMgr::doGrabExtruderLatest @0x7a8190.
+
+        Returns the filament retracted in the dock, which is owed back when
+        the tool reaches its restored position."""
         dock_x, dock_y = self._dock(tool)
+        return_retract = 0.
 
         # Precheck: the target must be detected in its dock (20 x 50 ms).
         # No motion at all on failure.
@@ -902,6 +993,13 @@ class FFToolchange:
 
                 if self._poll_until(self._grab_sensor, SEAT_TIMEOUT):
                     self._run(self.grab_macro)
+                    if retract_in_dock:
+                        # Select this tool's heater and motion queue before
+                        # touching E, and retract before the pullback can
+                        # draw an ooze string out of the dock.
+                        self._run('ACTIVATE_EXTRUDER EXTRUDER=%s'
+                                  % self._extruder_name(tool))
+                        return_retract = self._retract_in_dock()
                     # The pullback feed is the app's literal F4800
                     # (@0x7a9074), NOT the calibrated slow feed.
                     self._run('G1 X%.3f F%d'
@@ -948,6 +1046,7 @@ class FFToolchange:
             # sensors become the live ones (the app does this 3 s later
             # from a thread; here the grab moves are already complete).
             self._arm_runout(tool)
+            return return_retract
 
     # ---------------- release ----------------
 
@@ -1077,6 +1176,8 @@ class FFToolchange:
         # succeeded, since a half-finished sequence has no position worth
         # returning to.
         resume = self._capture_position() if restore_axis else None
+        protected = self._travel_protected(restore_axis)
+        return_retract = 0.
         self.changing = True
         try:
             self._wait_moves()
@@ -1087,10 +1188,12 @@ class FFToolchange:
             current, _ = self._derive_current_tool()
             if current != tool:
                 if current >= 0:
+                    if protected:
+                        self._raise_before_docking(resume)
                     self._release(current)
                 # _grab activates the extruder and applies the tool offsets,
                 # as the app does inside doGrabExtruderLatest.
-                self._grab(tool)
+                return_retract = self._grab(tool, retract_in_dock=protected)
             else:
                 # Same tool re-selected: still re-activate and re-apply, so
                 # the first Tn after a RESTART (which wiped the gcode
@@ -1105,7 +1208,12 @@ class FFToolchange:
             # channel. Upstream needs none: both apply to the ACTIVE extruder,
             # which _grab has just set to this tool.
             if resume is not None:
-                self._restore_position(restore_axis, resume)
+                # Re-selecting the mounted tool crossed nothing and retracted
+                # nothing, so it keeps the plain X/Y-first return.
+                self._restore_position(
+                    restore_axis, resume,
+                    protected=protected and current != tool,
+                    return_retract=return_retract)
         except FFToolchangeError as err:
             raise gcmd.error(str(err))
         except self.printer.command_error:

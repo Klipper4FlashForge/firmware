@@ -347,6 +347,23 @@ parking zeroes the tool offsets and the same G-code Z becomes a different
 machine Z (~3.2 mm, this tool's nozzle-to-station-trigger gap -- the station,
 not the eddy coil; see the note under Calibration).
 
+When X or Y is restored after a real change, the trip back can be made gentler
+on the part. Three groups of options in `[ff_toolchange]`, all zero as shipped:
+
+- `restore_z_hop` raises the old tool that far before it crosses the part to
+  its dock, and the new tool travels back at that height and descends at the
+  target.
+- `restore_retract` pulls that much filament back while the new tool is still
+  seated in its dock, before it is drawn out, so a hot nozzle does not drag an
+  ooze string. A tool below the minimum extrusion temperature is not retracted.
+- `restore_unretract` pushes back at most that much at the target. Setting it
+  below the retract is deliberate: the slicer's own extrusion supplies the rest
+  while moving, instead of a blob from a stationary prime.
+
+Feeds are `restore_z_feed`, `restore_retract_feed` and
+`restore_unretract_feed`. Re-selecting the tool that is already mounted, and any
+change that does not restore X or Y, behaves as before.
+
 `SET_TOOL_TEMPERATURE` addresses the extruder behind the tool; `WAIT=1` waits
 only for heat-up, as Klipper's own `TEMPERATURE_WAIT MINIMUM` does.
 `VERIFY_TOOL_DETECTED` accepts `ASYNC` and ignores it — we read switches after
