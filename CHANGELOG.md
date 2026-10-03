@@ -6,7 +6,34 @@ both printer models or through every real-world workflow.
 
 ## Unreleased
 
-Nothing yet.
+### Added
+
+- Bed-mesh probing lifts 2 mm above the previous trigger instead of back to one
+  fixed height before every point, which shortens `BED_MESH_CALIBRATE`
+  noticeably. The first move still goes to Z 5, and a calculated height under
+  Z 1 falls back to Z 3. `FF_BED_MESH_STATUS` shows the settings; they are the
+  `[ff_bed_mesh]` section of `ff-print-macros.cfg`. Contributed by
+  [@nielssedat](https://github.com/nielssedat) in
+  [#29](https://github.com/Klipper4FlashForge/firmware/pull/29).
+- `ADAPTIVE_MESH` and `DEFINE_PRIME_TOWER_OBJECT` for a slicer profile whose
+  start G-code calls them: the mesh is probed only over the objects and the
+  prime tower, the first tool is grabbed and the print offset set after it.
+  Set `variable_defer_mesh: 1` on `FF_BEFORE_PRINT_START` to have `START_PRINT`
+  leave those steps to the file. `ADAPTIVE_MESH_TOGGLE` (a Mainsail tile) turns
+  adaptive probing off to load the saved `MESH_DATA` instead. Not on by
+  default; nothing changes for a profile that does not call them.
+- `printer.ff_print` reports the active plate's prime tower (position, size,
+  brim, rotation and measured outline) and, when the second tool's first
+  heating command is near the start of the file, `next_tool` and
+  `next_nozzle`. `ADAPTIVE_MESH` heats that tool once the mesh is done.
+- The shared-stepper adapter `ff_extruder.py`, for a printer whose four
+  logical extruders repeat one physical stepper's options. It does nothing
+  until a `[ff_extruder]` section is configured, and none is yet.
+
+### Changed
+
+- `START_PRINT` starts heating the bed before the first homing instead of after
+  it, so the bed is closer to temperature when the nozzle clean ends.
 
 ## v20260827f-melitopol — 2026-09-24
 

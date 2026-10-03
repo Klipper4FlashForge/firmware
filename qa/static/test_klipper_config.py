@@ -153,8 +153,11 @@ def _parse_params(line, cmd):
     return {k.upper(): v for k, v in (a.split("=", 1) for a in lex)}
 
 
-def _run(model, command, has_heater):
+def _run(model, command, has_heater, extra=None):
     """Expand `command` until only non-macro commands remain, as klippy would.
+
+    `extra` adds printer objects a macro reads that are not macros themselves,
+    such as {"ff_print": {...}}.
 
     Returns (emitted commands, action_respond_info messages).
     """
@@ -173,6 +176,7 @@ def _run(model, command, has_heater):
     if has_heater:
         printer["heater_generic chamber_heater"] = {
             "temperature": 25.0, "target": 0.0}
+    printer.update(extra or {})
 
     env = jinja2.Environment("{%", "%}", "{", "}")
     out, info = [], []
@@ -344,3 +348,190 @@ def test_the_chamber_heater_fan_matches_the_model(model):
             "would fail lookup_heater() at klippy:ready")
         assert cp.get(sec, "pin").strip() == "PD12"
         assert "heater_fan chamber_heat_fan" not in cp.sections()
+
+
+# --------------------------------------------------------------------------
+# Print start: heating, deferred mesh, adaptive mesh.
+# --------------------------------------------------------------------------
+
+def _commands(out):
+    """What klippy would see: comment text gone, blank lines gone."""
+    lines = (line.split(";", 1)[0].strip() for line in out)
+    return [line for line in lines if line]
+
+
+def _idle_file(**overrides):
+    status = {"next_tool": None, "next_nozzle": None}
+    status.update(overrides)
+    return {"ff_print": status, "ff_toolchange": {
+        "calibrated_tools": [0, 1, 2, 3], "docked_tools": [0, 1, 2, 3],
+        "current_tool": -1, "station_z": 1.0, "print_offset_ready": True,
+        "state_ok": True, "state_reason": ""}}
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_the_bed_starts_heating_before_the_first_homing(model):
+    out, _ = _run(model, "START_PRINT BED=60 TOOL=0 NOZZLE=220 CLEAN=0",
+                  has_heater=model == "Creator5Pro", extra=_idle_file())
+    out = _commands(out)
+
+    # ff-legacy.cfg's G28 wrapper docks a mounted tool and calls G28.1.
+    assert out.index("M140 S60.0") < out.index("G28.1")
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_start_print_without_defer_still_meshes_and_grabs_the_first_tool(model):
+    out, _ = _run(model, "START_PRINT BED=60 TOOL=2 NOZZLE=220 CLEAN=0",
+                  has_heater=model == "Creator5Pro", extra=_idle_file())
+    out = _commands(out)
+
+    assert "BED_MESH_PROFILE LOAD=MESH_DATA" in out
+    assert out.index("G28.1 Z") < out.index("BED_MESH_PROFILE LOAD=MESH_DATA")
+    assert out.index("BED_MESH_PROFILE LOAD=MESH_DATA") < out.index("T2")
+    assert ("TOOLCHANGE_SET_PRINT_OFFSET NOZZLE=220.0 BED=60.0 LAYER=0.0 TOOL=2"
+            in out)
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_a_deferred_start_leaves_the_mesh_and_the_grab_to_the_file(model):
+    out, _ = _run(model,
+                  "START_PRINT BED=60 TOOL=2 NOZZLE=220 CLEAN=0 DEFER_MESH=1",
+                  has_heater=model == "Creator5Pro", extra=_idle_file())
+    out = _commands(out)
+
+    assert "M190 S60.0" in out
+    for left_to_the_file in ("G28.1 Z", "T2", "BED_MESH_PROFILE LOAD=MESH_DATA",
+                             "BED_MESH_CALIBRATE", "G1 Z10 F1200"):
+        assert left_to_the_file not in out
+    assert not any(c.startswith("TOOLCHANGE_SET_PRINT_OFFSET") for c in out)
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_defer_mesh_is_passed_on_only_when_the_variable_asks_for_it(model):
+    cp = _parse(model)
+    macro = cp.get("gcode_macro FF_BEFORE_PRINT_START", "gcode")
+
+    assert cp.get("gcode_macro FF_BEFORE_PRINT_START",
+                  "variable_defer_mesh").strip() == "0"
+    assert "{% if me.defer_mesh %} DEFER_MESH=1{% endif %}" in macro
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_the_adaptive_mesh_probes_then_grabs_the_first_tool(model):
+    out, _ = _run(model,
+                  "ADAPTIVE_MESH TOOL=1 NOZZLE=230 BED=60 LAYER=0.2",
+                  has_heater=model == "Creator5Pro", extra=_idle_file())
+    out = _commands(out)
+    probe = "BED_MESH_CALIBRATE ADAPTIVE=1 ADAPTIVE_MARGIN=16.0"
+
+    assert out[:4] == ["TOOLCHANGE_SET_PRINT_OFFSET CLEAR=1", "TOOLCHANGE_PARK",
+                       "G28.1 Z", "BED_MESH_CLEAR"]
+    assert out.index(probe) < out.index("T1")
+    assert out[-3:] == [
+        "M104 S230.0 T1", "T1",
+        "TOOLCHANGE_SET_PRINT_OFFSET NOZZLE=230.0 BED=60.0 LAYER=0.2 TOOL=1"]
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_the_second_tool_is_preheated_after_the_first_is_grabbed(model):
+    out, info = _run(model, "ADAPTIVE_MESH TOOL=0 NOZZLE=220 BED=60 LAYER=0.2",
+                     has_heater=model == "Creator5Pro",
+                     extra=_idle_file(next_tool=2, next_nozzle=245))
+    out = _commands(out)
+
+    assert out.index("T0") < out.index("M104 S245 T2")
+    assert any("Preheating next tool T2 to 245 C" in m for m in info)
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_no_second_tool_means_no_preheat(model):
+    out, _ = _run(model, "ADAPTIVE_MESH TOOL=0 NOZZLE=220 BED=60 LAYER=0.2",
+                  has_heater=model == "Creator5Pro", extra=_idle_file())
+
+    assert [c for c in _commands(out) if c.startswith("M104")] == [
+        "M104 S220.0 T0"]
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_the_preheat_ignores_a_second_tool_that_is_the_first(model):
+    out, _ = _run(model, "ADAPTIVE_MESH TOOL=2 NOZZLE=220 BED=60 LAYER=0.2",
+                  has_heater=model == "Creator5Pro",
+                  extra=_idle_file(next_tool=2, next_nozzle=245))
+
+    assert [c for c in _commands(out) if c.startswith("M104")] == [
+        "M104 S220.0 T2"]
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_the_toggle_chooses_between_a_new_mesh_and_the_saved_one(model):
+    gcode = _parse(model).get("gcode_macro ADAPTIVE_MESH", "gcode")
+    env = jinja2.Environment("{%", "%}", "{", "}")
+
+    def render(enabled):
+        return _commands(env.from_string(gcode).render(
+            params={}, printer={
+                "gcode_macro ADAPTIVE_MESH_TOGGLE": {"enabled": enabled},
+                "ff_print": {"next_tool": None, "next_nozzle": None}},
+            action_respond_info=lambda m: "",
+            action_raise_error=_raise).splitlines())
+
+    saved, probed = render(0), render(1)
+    assert "BED_MESH_PROFILE LOAD=MESH_DATA" in saved
+    assert not any(c.startswith("BED_MESH_CALIBRATE") for c in saved)
+    assert any(c.startswith("BED_MESH_CALIBRATE ADAPTIVE=1") for c in probed)
+    assert "BED_MESH_PROFILE LOAD=MESH_DATA" not in probed
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_the_toggle_flips_and_validates(model):
+    flipped, _ = _run(model, "ADAPTIVE_MESH_TOGGLE", has_heater=False)
+    off, info = _run(model, "ADAPTIVE_MESH_TOGGLE ENABLE=0", has_heater=False)
+    disable = ("SET_GCODE_VARIABLE MACRO=ADAPTIVE_MESH_TOGGLE "
+               "VARIABLE=enabled VALUE=0")
+
+    assert _commands(flipped) == [disable]
+    assert _commands(off) == [disable]
+    assert any("DISABLED" in m for m in info)
+    with pytest.raises(AssertionError, match="ENABLE must be 0 or 1"):
+        _run(model, "ADAPTIVE_MESH_TOGGLE ENABLE=2", has_heater=False)
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_the_prime_tower_is_defined_from_the_files_measured_outline(model):
+    tower = {
+        "prime_tower_x": 16.4744, "prime_tower_y": 221.74,
+        "prime_tower_width": 28.0, "prime_tower_depth": 27.0,
+        "prime_tower_brim": 2.2, "prime_tower_rotation": 0.0,
+        "prime_tower_center_x": 23.645, "prime_tower_center_y": 209.136,
+        "prime_tower_core_min_x": None,
+        "prime_tower_outer_min_x": 7.413, "prime_tower_outer_max_x": 39.877,
+        "prime_tower_outer_min_y": 193.394, "prime_tower_outer_max_y": 224.878,
+    }
+    out, info = _run(
+        model, "DEFINE_PRIME_TOWER_OBJECT X=999 Y=999 WIDTH=10",
+        has_heater=False, extra={"ff_print": tower})
+
+    assert _commands(out) == [
+        "EXCLUDE_OBJECT_DEFINE NAME=PRIME_TOWER CENTER=23.645,209.136 "
+        "POLYGON=[[6.413,192.394],[40.877,192.394],[40.877,225.878],"
+        "[6.413,225.878],[6.413,192.394]]"]
+    assert any("replacing the start G-code's 999.000,999.000" in m
+               for m in info)
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_a_tower_without_a_measured_outline_is_boxed_at_any_rotation(model):
+    blank = {key: None for key in (
+        "prime_tower_x", "prime_tower_y", "prime_tower_width",
+        "prime_tower_depth", "prime_tower_brim", "prime_tower_rotation",
+        "prime_tower_center_x", "prime_tower_center_y",
+        "prime_tower_core_min_x", "prime_tower_outer_min_x")}
+    out, _ = _run(
+        model, "DEFINE_PRIME_TOWER_OBJECT X=100 Y=200 WIDTH=20 DEPTH=10 BRIM=2",
+        has_heater=False, extra={"ff_print": blank})
+
+    # Centre (110, 205); half extents 10+2+1 and 5+2+1; r = sqrt(2) * 13.
+    (command,) = _commands(out)
+    assert command.startswith(
+        "EXCLUDE_OBJECT_DEFINE NAME=PRIME_TOWER CENTER=110.0,205.0 POLYGON=")
+    assert "[[91.615" in command and "128.384" in command
