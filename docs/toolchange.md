@@ -325,10 +325,13 @@ commands they send: `SELECT_TOOL T=<n>` (= `T<n>`), `UNSELECT_TOOL [T=<n>]`
 (= `TOOLCHANGE_PARK`), `INITIALIZE_TOOLCHANGER` (state check, no motion),
 `SET_TOOL_TEMPERATURE [T=<n>] TARGET=<t> [WAIT=1]`,
 `VERIFY_TOOL_DETECTED [T=<n>] [ASYNC=…]` and `SELECT_TOOL_ERROR [MESSAGE=…]`.
-`status` is `changing` from before the first move of a **toolchange** until the
-sensors confirm the swap, `error` when the dock sensors disagree, else `ready`.
-A bare park (`TOOLCHANGE_PARK` / `UNSELECT_TOOL`) never sets it, so it reports
-`ready` throughout one.
+`status` is `changing` while a tool selection, change, or bare park
+(`TOOLCHANGE_PARK` / `UNSELECT_TOOL`) is executing. After a successful standalone
+park it returns to `ready`; a park nested inside a toolchange leaves it
+`changing` until the outer operation finishes. Raw sensor validation remains
+active throughout: `ff_toolchange.state_ok` and `state_reason` still report
+invalid combinations, including the transient dock/grab overlap during parking.
+Outside an active operation, invalid sensor state reports `error`, else `ready`.
 We keep no commanded tool state, so `detected_tool*` always equals `tool*`:
 both are derived from the dock and grab sensors.
 
