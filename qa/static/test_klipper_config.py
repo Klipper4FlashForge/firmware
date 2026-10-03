@@ -576,6 +576,34 @@ def test_the_nozzle_clean_falls_back_from_afcs_record_to_the_print(lane, want):
     assert _prep_temp(lines) == want, lines
 
 
+def test_every_afc_head_waits_for_its_temperature_before_the_restore():
+    """AFC restores the print position as soon as the grab returns, so the
+    grab is _FF_AFC_SELECT: it selects the head, then waits for the target
+    the file already set, on that head's own heater."""
+    cp = _parse("Creator5Pro")
+    for n, lane in enumerate(_afc_lanes(cp)):
+        sec = "AFC_extruder " + lane
+        assert cp.get(sec, "custom_tool_swap").strip() == \
+            "_FF_AFC_SELECT TOOL=%d" % n, sec
+
+
+@pytest.mark.parametrize("tool,heater", [
+    (0, "extruder"), (1, "extruder1"), (3, "extruder3")])
+def test_the_afc_grab_waits_just_under_the_heads_target(tool, heater):
+    cp = _parse("Creator5Pro")
+    lines, _ = _render(cp, "_FF_AFC_SELECT", {"TOOL": str(tool)},
+                       {heater: {"target": 245.0}})
+    assert lines == ["SELECT_TOOL T=%d" % tool,
+                     "TEMPERATURE_WAIT SENSOR=%s MINIMUM=243.0" % heater]
+
+
+def test_the_afc_grab_does_not_wait_for_a_head_with_no_target():
+    cp = _parse("Creator5Pro")
+    lines, _ = _render(cp, "_FF_AFC_SELECT", {"TOOL": "2"},
+                       {"extruder2": {"target": 0.0}})
+    assert lines == ["SELECT_TOOL T=2"]
+
+
 def test_afc_moves_back_at_travel_speed_within_the_limits():
     """AFC's restore after every change runs at resume_speed/resume_z_speed,
     25 mm/s unless set -- a visible crawl back to the print on every

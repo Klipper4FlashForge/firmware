@@ -50,6 +50,12 @@ both printer models or through every real-world workflow.
 
 ### Fixed
 
+- A toolchange no longer returns to the print with the new head still
+  heating. AFC moved the head back over the part as soon as it had grabbed the
+  new head, so the nozzle reached temperature above the model and left blobs
+  on it. The head now waits at the dock exit for the temperature the file
+  already set, then returns. See the upstream report,
+  [AFC-Klipper-Add-On #872](https://github.com/AFCProject/AFC-Klipper-Add-On/issues/872).
 - The factory XYZ calibration import marker now lives in persistent
   `/usr/data/anvil-data` state, so reinstalling firmware does not reconsider
   or repeat the stock-JSON import. Upgrading migrates the marker from its old

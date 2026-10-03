@@ -336,7 +336,10 @@ We keep no commanded tool state, so `detected_tool*` always equals `tool*`:
 both are derived from the dock and grab sensors.
 
 No position is put back after a change: AFC saves the toolhead position
-before every change it drives and restores it after. Upstream's other commands
+before every change it drives and restores it after. Before that restore the
+head waits at the dock exit until it is within 2 °C of the target the file set
+(`_FF_AFC_SELECT`), so it never heats above the part; a head with no target
+does not wait. Upstream's other commands
 (`INITIALIZE_TOOLCHANGER`, `SET_TOOL_TEMPERATURE`, `VERIFY_TOOL_DETECTED`,
 `SELECT_TOOL_ERROR`, `ASSIGN_TOOL`, `RESTORE_AXIS=`) are not implemented:
 only HelixScreen's tool-changer backend sent any of them, and with AFC present
