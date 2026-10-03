@@ -133,6 +133,38 @@ START_PRINT TOOLS=0:220,2:240 BED=60 LEVEL=1 SOAK=300
 | `CLEAN=0` | skip the pre-print purge and wipe |
 | `LEVEL=1` | probe a fresh mesh instead of loading the saved one |
 | `SOAK=<seconds>` | dwell after the bed reaches target. The app waited 5 minutes; the default here is 0 |
+| `DEFER_MESH=1` | stop after the clean and the soak; the file's own `ADAPTIVE_MESH` does the rest (below) |
+
+### Mesh only where the print is
+
+A mesh over the whole bed spends most of its time under nothing. With a
+profile that labels objects, the mesh can cover only the objects and the prime
+tower. Tell the automatic preparation to leave the mesh to the file:
+
+```ini
+[gcode_macro FF_BEFORE_PRINT_START]
+variable_defer_mesh: 1
+```
+
+and call these from Machine start G-code, after Orca's own object
+definitions:
+
+```gcode
+{if has_wipe_tower}
+DEFINE_PRIME_TOWER_OBJECT X=[wipe_tower_x] Y=[wipe_tower_y] WIDTH=[prime_tower_width] BRIM=[prime_tower_brim_width] ROT=[wipe_tower_rotation_angle]
+{endif}
+ADAPTIVE_MESH TOOL=[initial_extruder] NOZZLE=[nozzle_temperature_initial_layer] BED=[bed_temperature_initial_layer_single] LAYER=[layer_height]
+M109 S[nozzle_temperature_initial_layer] T[initial_extruder]
+```
+
+`ADAPTIVE_MESH` parks, homes Z, probes the mesh, grabs the first tool, sets
+the print offset, and starts heating the second tool when the file's first
+colour is too short for Orca's own preheat to land in the object body.
+`DEFINE_PRIME_TOWER_OBJECT` uses the tower the file actually prints rather
+than the numbers Orca expands into the start G-code, which in a multi-plate
+project can belong to another plate. `ADAPTIVE_MESH_TOGGLE` (a tile in
+Mainsail) switches probing off, and the saved `MESH_DATA` is loaded instead.
+It is enabled again after a restart.
 
 ---
 
