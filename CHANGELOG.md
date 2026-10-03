@@ -22,10 +22,8 @@ both printer models or through every real-world workflow.
   leave those steps to the file. `ADAPTIVE_MESH_TOGGLE` (a Mainsail tile) turns
   adaptive probing off to load the saved `MESH_DATA` instead. Not on by
   default; nothing changes for a profile that does not call them.
-- `printer.ff_print` reports the active plate's prime tower (position, size,
-  brim, rotation and measured outline) and, when the second tool's first
-  heating command is near the start of the file, `next_tool` and
-  `next_nozzle`. `ADAPTIVE_MESH` heats that tool once the mesh is done.
+- `printer.ff_print` reports the active plate's prime tower: position, size,
+  brim, rotation and measured outline.
 - The shared-stepper adapter `ff_extruder.py`, for a printer whose four
   logical extruders repeat one physical stepper's options. It does nothing
   until a `[ff_extruder]` section is configured, and none is yet.

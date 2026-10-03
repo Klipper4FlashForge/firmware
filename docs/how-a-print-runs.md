@@ -143,8 +143,7 @@ M109 S[nozzle_temperature_initial_layer] T[initial_extruder]
 ```
 
 `ADAPTIVE_MESH` parks, homes Z, probes the mesh, grabs the first tool, sets
-the print offset, and starts heating the second tool when the file's first
-colour is too short for Orca's own preheat to land in the object body.
+and the print offset.
 `DEFINE_PRIME_TOWER_OBJECT` uses the tower the file actually prints rather
 than the numbers Orca expands into the start G-code, which in a multi-plate
 project can belong to another plate. `ADAPTIVE_MESH_TOGGLE` (a tile in
