@@ -24,9 +24,6 @@ both printer models or through every real-world workflow.
   default; nothing changes for a profile that does not call them.
 - `printer.ff_print` reports the active plate's prime tower: position, size,
   brim, rotation and measured outline.
-- The shared-stepper adapter `ff_extruder.py`, for a printer whose four
-  logical extruders repeat one physical stepper's options. It does nothing
-  until a `[ff_extruder]` section is configured, and none is yet.
 - AFC (the AFC-Klipper-Add-On) runs over the toolchanger, one lane per head.
   `SET_MAP` prints any slicer tool number on any head and is remembered across
   restarts; `SET_RUNOUT` names a backup head that takes over when a spool runs
