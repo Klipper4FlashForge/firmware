@@ -72,6 +72,7 @@ class Park:
         self.module = module
         self.mounted = mounted
         self.fail = fail
+        self.changing = False
         self.events = []
         self.bed_mesh = BedMesh(mesh)
         self.toolhead = Toolhead(homed_axes)
