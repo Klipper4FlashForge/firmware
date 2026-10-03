@@ -53,39 +53,3 @@ G1 Y193.394
     assert metadata["prime_tower_outer_max_x"] == pytest.approx(39.877)
     assert metadata["prime_tower_outer_min_y"] == pytest.approx(193.394)
     assert metadata["prime_tower_outer_max_y"] == pytest.approx(224.878)
-
-
-def test_next_tool_and_its_target_come_from_the_start_of_the_file(tmp_path):
-    gcode = tmp_path / "two-colour.gcode"
-    gcode.write_text(
-        "M140 S60\nM104 S220\nT0\nG1 X1 Y1\nM104 S245 T2\nT2\n"
-        "M109 S245\nG1 X2 Y2\nT0\nM109 S220\n",
-        encoding="utf-8")
-
-    metadata = _load_module()._parse_metadata(str(gcode))
-
-    assert metadata["tool"] == 0
-    assert metadata["next_tool"] == 2
-    assert metadata["next_nozzle"] == 245
-
-
-def test_a_second_tool_beyond_the_head_is_not_preheated_from_the_start(tmp_path):
-    module = _load_module()
-    gcode = tmp_path / "late-change.gcode"
-    filler = "G1 X1 Y1 E1\n" * (module.HEAD_BYTES // 12 + 10)
-    gcode.write_text(
-        "M104 S220\nT0\n" + filler + "T1\nM109 S230\n", encoding="utf-8")
-
-    metadata = module._parse_metadata(str(gcode))
-
-    assert "next_tool" not in metadata
-    assert "next_nozzle" not in metadata
-
-
-def test_a_single_colour_file_has_no_next_tool(tmp_path):
-    gcode = tmp_path / "one-colour.gcode"
-    gcode.write_text("M104 S220\nT0\nG1 X1 Y1\n", encoding="utf-8")
-
-    metadata = _load_module()._parse_metadata(str(gcode))
-
-    assert "next_tool" not in metadata

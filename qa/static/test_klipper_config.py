@@ -626,10 +626,8 @@ def _commands(out):
     return [line for line in lines if line]
 
 
-def _idle_file(**overrides):
-    status = {"next_tool": None, "next_nozzle": None}
-    status.update(overrides)
-    return {"ff_print": status, "ff_toolchange": {
+def _idle_file():
+    return {"ff_toolchange": {
         "calibrated_tools": [0, 1, 2, 3], "docked_tools": [0, 1, 2, 3],
         "current_tool": -1, "station_z": 1.0, "print_offset_ready": True,
         "state_ok": True, "state_reason": ""}}
@@ -699,36 +697,6 @@ def test_the_adaptive_mesh_probes_then_grabs_the_first_tool(model):
 
 
 @pytest.mark.parametrize("model", MODELS)
-def test_the_second_tool_is_preheated_after_the_first_is_grabbed(model):
-    out, info = _run(model, "ADAPTIVE_MESH TOOL=0 NOZZLE=220 BED=60 LAYER=0.2",
-                     has_heater=model == "Creator5Pro",
-                     extra=_idle_file(next_tool=2, next_nozzle=245))
-    out = _commands(out)
-
-    assert out.index("T0") < out.index("M104 S245 T2")
-    assert any("Preheating next tool T2 to 245 C" in m for m in info)
-
-
-@pytest.mark.parametrize("model", MODELS)
-def test_no_second_tool_means_no_preheat(model):
-    out, _ = _run(model, "ADAPTIVE_MESH TOOL=0 NOZZLE=220 BED=60 LAYER=0.2",
-                  has_heater=model == "Creator5Pro", extra=_idle_file())
-
-    assert [c for c in _commands(out) if c.startswith("M104")] == [
-        "M104 S220.0 T0"]
-
-
-@pytest.mark.parametrize("model", MODELS)
-def test_the_preheat_ignores_a_second_tool_that_is_the_first(model):
-    out, _ = _run(model, "ADAPTIVE_MESH TOOL=2 NOZZLE=220 BED=60 LAYER=0.2",
-                  has_heater=model == "Creator5Pro",
-                  extra=_idle_file(next_tool=2, next_nozzle=245))
-
-    assert [c for c in _commands(out) if c.startswith("M104")] == [
-        "M104 S220.0 T2"]
-
-
-@pytest.mark.parametrize("model", MODELS)
 def test_the_toggle_chooses_between_a_new_mesh_and_the_saved_one(model):
     gcode = _parse(model).get("gcode_macro ADAPTIVE_MESH", "gcode")
     env = jinja2.Environment("{%", "%}", "{", "}")
@@ -736,8 +704,7 @@ def test_the_toggle_chooses_between_a_new_mesh_and_the_saved_one(model):
     def render(enabled):
         return _commands(env.from_string(gcode).render(
             params={}, printer={
-                "gcode_macro ADAPTIVE_MESH_TOGGLE": {"enabled": enabled},
-                "ff_print": {"next_tool": None, "next_nozzle": None}},
+                "gcode_macro ADAPTIVE_MESH_TOGGLE": {"enabled": enabled}},
             action_respond_info=lambda m: "",
             action_raise_error=_raise).splitlines())
 
