@@ -32,9 +32,6 @@ both printer models or through every real-world workflow.
   shipped, which changes nothing. From
   [#29](https://github.com/Klipper4FlashForge/firmware/pull/29), without its
   prime-tower handling.
-- The shared-stepper adapter `ff_extruder.py`, for a printer whose four
-  logical extruders repeat one physical stepper's options. It does nothing
-  until a `[ff_extruder]` section is configured, and none is yet.
 
 ### Changed
 
