@@ -29,6 +29,8 @@ def parking(monkeypatch):
     spec.loader.exec_module(module)
     tc = module.FFToolchange.__new__(module.FFToolchange)
     tc.changing = False
+    # No bed mesh is loaded, so the park's unhomed-Z mesh guard stays idle.
+    tc.printer = SimpleNamespace(lookup_object=lambda name, default=None: None)
     tc.restore_axis = ""
     tc.release_macro = "MOTOR_RELEASE"
     tc.dock_sensors = ["dock%d" % i for i in range(module.EXTRUDER_COUNT)]
