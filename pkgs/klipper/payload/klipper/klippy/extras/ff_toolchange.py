@@ -212,11 +212,26 @@ class _ToolTransform:
 
     def move(self, newpos, speed):
         offsets = self._offsets()
-        if offsets is None:
-            return self.next_transform.move(newpos, speed)
-        return self.next_transform.move(
-            [newpos[0] + offsets[0], newpos[1] + offsets[1],
-             newpos[2] + offsets[2]] + list(newpos[3:]), speed)
+        target = list(newpos)
+        if offsets is not None:
+            target[:3] = [newpos[i] + offsets[i] for i in range(3)]
+        afc = self.toolchange.printer.lookup_object('AFC', None)
+        if afc is not None and str(afc.current_state) == 'Restoring':
+            current = list(self.next_transform.get_position())
+            safe_x = self.toolchange.x_safe
+            if abs(target[1] - current[1]) > 1e-6 and max(current[0], target[0]) > safe_x:
+                # AFC restores a nozzle position through this transform.
+                # Route in machine XY after applying the incoming tool's
+                # offsets. Y travel must stay clear of the occupied docks.
+                if current[0] > safe_x:
+                    current[0] = safe_x
+                    self.next_transform.move(list(current), speed)
+                if target[0] > safe_x:
+                    current[1] = target[1]
+                    self.next_transform.move(list(current), speed)
+                # If the destination is inside the corridor, the remaining
+                # diagonal is clear; otherwise this final move changes X only.
+        return self.next_transform.move(target, speed)
 
     def get_position(self):
         base = self.next_transform.get_position()
@@ -308,6 +323,22 @@ class FFToolchange:
         self.grab_retreat_feed = config.getint('grab_retreat_feed', 1500)
         self.release_retreat_feed = config.getint('release_retreat_feed', 4800)
         self.accel_move = config.getint('accel_move', 8000)
+        # Opt-in: combine approach XY only inside the established dock
+        # clearance corridor. Factory paths remain the default.
+        self.dock_shortcuts = config.getboolean('dock_shortcuts', False)
+        self.soft_docking = config.getboolean('soft_docking', False)
+        # File-output simulator may inject an overlap experiment controller.
+        # Production has no concurrent endstop backend and stays synchronous.
+        self.release_overlap = None
+        self.contact_depth = config.getfloat('contact_depth', 20., above=0.)
+        self.contact_margin = config.getfloat('contact_margin', 5., above=0.)
+        self.contact_speed = config.getfloat('contact_speed', 20., above=0.)
+        self.withdrawal_speed = config.getfloat('withdrawal_speed', 20., above=0.,
+                                                maxval=self.contact_speed)
+        self.contact_accel = config.getfloat('contact_accel', 50., above=0.)
+        self.ease_distance = config.getfloat('ease_distance', 5., above=0.,
+                                             maxval=self.contact_depth)
+        self.rail_speed = config.getfloat('rail_speed', 200., above=self.contact_speed)
         # Post-sequence accel. The app hardcodes 20000; unset, we restore the
         # limit that was live when the sequence started (a user with a lower
         # [printer] max_accel must not come out of a toolchange faster).
@@ -796,9 +827,101 @@ class FFToolchange:
 
     # ---------------- grab ----------------
 
+    def _move_to_dock_y(self, dock_y):
+        # Called with the tool frame suspended, so these are machine XY.
+        # The segment between two X<=x_safe endpoints stays in the clear
+        # half-plane. Starting outside it requires an X-only retreat first.
+        position = self.printer.lookup_object('toolhead').get_position()
+        if self.dock_shortcuts and position[0] <= self.x_safe:
+            self._run('G1 X%.3f Y%.3f F%d'
+                      % (self.x_safe, dock_y, self.fast_feed))
+        else:
+            self._run('G1 X%.3f F%d' % (self.x_safe, self.fast_feed))
+            self._run('G1 Y%.3f' % dock_y)
+
+    def _seating_ease_distance(self):
+        # Start braking early enough to stop at contact_accel without a
+        # high-acceleration speed drop inside the rubber.
+        return max(self.ease_distance,
+                   self.contact_speed ** 2 / (2. * self.contact_accel))
+
+    def _contact_exit(self, dock_x):
+        exit_x = dock_x - self.contact_depth - self.contact_margin
+        if exit_x <= self.x_safe:
+            raise FFToolchangeError('Rubber contact region overlaps the dock clearance corridor')
+        if dock_x - self._seating_ease_distance() <= self.x_safe:
+            raise FFToolchangeError('Gentle braking region overlaps the dock clearance corridor')
+        return exit_x
+
+    @contextlib.contextmanager
+    def _contact_profile(self):
+        th = self.printer.lookup_object('toolhead')
+        ratio = th.get_status(self.reactor.monotonic())['minimum_cruise_ratio']
+        try:
+            # Pure acceleration/deceleration sections must not be reshaped
+            # into short cruise plateaus by minimum_cruise_ratio.
+            self._run('SET_VELOCITY_LIMIT MINIMUM_CRUISE_RATIO=0')
+            yield
+        finally:
+            self._run('SET_VELOCITY_LIMIT ACCEL=%d MINIMUM_CRUISE_RATIO=%.17g'
+                      % (self.accel_move, ratio))
+
+    def _soft_seat(self, dock_x, on_brake=None):
+        th = self.printer.lookup_object('toolhead')
+        ease_x = dock_x - self._seating_ease_distance()
+        exit_x = min(self._contact_exit(dock_x), ease_x)
+        with self._contact_profile():
+            current_x = th.get_position()[0]
+            if current_x > exit_x:
+                # Retry starts at the seated position: back out gently.
+                self._run('SET_VELOCITY_LIMIT ACCEL=%.3f' % self.contact_accel)
+                self._run('G1 X%.6f F%.3f' % (exit_x, self.withdrawal_speed * 60.))
+                current_x = exit_x
+            if current_x < exit_x - 1e-6:
+                self._run('SET_VELOCITY_LIMIT ACCEL=%d' % self.accel_move)
+                self._run('G1 X%.6f F%d' % (exit_x, self.fast_feed))
+            if exit_x < ease_x - 1e-6:
+                self._run('SET_VELOCITY_LIMIT ACCEL=%d' % self.accel_move)
+                self._run('G1 X%.6f F%.3f' %
+                          (ease_x, self.contact_speed * 60.))
+            self._run('SET_VELOCITY_LIMIT ACCEL=%.3f' % self.contact_accel)
+            if on_brake is not None:
+                th.register_lookahead_callback(on_brake)
+            # Keep the contact speed through the ease boundary. Only the
+            # acceleration limit changes; braking stops us at the endpoint.
+            self._run('G1 X%.6f F%.3f' % (dock_x, self.contact_speed * 60.))
+            self._wait_moves()
+
+    def _empty_withdraw(self, target_x):
+        # Only after successful unlock, or a pickup attempt that never
+        # actuated the lock. No nozzle travels through the rubber here.
+        self._run('SET_VELOCITY_LIMIT ACCEL=%d' % self.accel_move)
+        self._run('G1 X%.6f F%d' % (target_x, self.fast_feed))
+
+    def _soft_withdraw(self, dock_x, target_x, accelerate=False):
+        th = self.printer.lookup_object('toolhead')
+        exit_x = self._contact_exit(dock_x)
+        with self._contact_profile():
+            if not accelerate:
+                self._run('SET_VELOCITY_LIMIT ACCEL=%.3f' % self.contact_accel)
+                self._run('G1 X%.6f F%.3f' % (target_x, self.withdrawal_speed * 60.))
+                return
+            current_x = th.get_position()[0]
+            if current_x > exit_x:
+                slow_end = max(exit_x, target_x)
+                self._run('SET_VELOCITY_LIMIT ACCEL=%.3f' % self.contact_accel)
+                self._run('G1 X%.6f F%.3f' % (slow_end, self.withdrawal_speed * 60.))
+            if target_x < exit_x:
+                # The nozzle has cleared rubber and the configured margin.
+                # Restore travel acceleration only for this free-rail move.
+                self._run('SET_VELOCITY_LIMIT ACCEL=%d' % self.accel_move)
+                self._run('G1 X%.6f F%.3f' % (target_x, self.rail_speed * 60.))
+
     def _grab(self, tool):
         """Port of CommMgr::doGrabExtruderLatest @0x7a8190."""
         dock_x, dock_y = self._dock(tool)
+        if self.soft_docking:
+            self._contact_exit(dock_x)
 
         # Precheck: the target must be detected in its dock (20 x 50 ms).
         # No motion at all on failure.
@@ -816,9 +939,9 @@ class FFToolchange:
             # which is the truth -- nothing is mounted.
             self._set_tool_frame(None)
             self._run('G90')
-            self._run('G1 X%.3f F%d' % (self.x_safe, self.fast_feed))
-            self._run('G1 Y%.3f' % dock_y)
-            self._run('G1 X%.3f' % self.x_approach)
+            self._move_to_dock_y(dock_y)
+            if not self.soft_docking:
+                self._run('G1 X%.3f' % self.x_approach)
 
             # Up to 3 attempts; within each, poll up to 1 s for the grab
             # sensor before energising the motor.
@@ -827,7 +950,10 @@ class FFToolchange:
                 # does, so the back-off to x_approach is undone before the
                 # next round of polling. Without it, attempts 2 and 3 poll
                 # from the backed-off position and can never mate.
-                self._run('G1 X%.3f F%d' % (dock_x, self.slow_feed))
+                if self.soft_docking:
+                    self._soft_seat(dock_x)
+                else:
+                    self._run('G1 X%.3f F%d' % (dock_x, self.slow_feed))
                 self._wait_moves()
 
                 # the app sleeps before its first poll
@@ -838,8 +964,11 @@ class FFToolchange:
                     self._run(self.grab_macro)
                     # The pullback feed is the app's literal F4800
                     # (@0x7a9074), NOT the calibrated slow feed.
-                    self._run('G1 X%.3f F%d'
-                              % (dock_x - self.grab_pullback, PULLBACK_FEED))
+                    if self.soft_docking:
+                        self._soft_withdraw(dock_x, dock_x - self.grab_pullback)
+                    else:
+                        self._run('G1 X%.3f F%d'
+                                  % (dock_x - self.grab_pullback, PULLBACK_FEED))
                     self._run(self.grab2_macro)
                     break
 
@@ -847,7 +976,10 @@ class FFToolchange:
                              " failed, backing off",
                              attempt + 1, GRAB_ATTEMPTS, tool)
 
-                self._run('G1 X%.3f' % self.x_approach)
+                if self.soft_docking:
+                    self._empty_withdraw(self._contact_exit(dock_x))
+                else:
+                    self._run('G1 X%.3f' % self.x_approach)
                 self._wait_moves()
                 self._sleep(BACKOFF_WAIT)
 
@@ -856,7 +988,10 @@ class FFToolchange:
                     "grab sensor never activated for T%d after %d attempts"
                     % (tool, GRAB_ATTEMPTS))
 
-            self._run('G1 X%.3f F%d' % (self.x_safe, self.grab_retreat_feed))
+            if self.soft_docking:
+                self._soft_withdraw(dock_x, self.x_safe, accelerate=True)
+            else:
+                self._run('G1 X%.3f F%d' % (self.x_safe, self.grab_retreat_feed))
             self._wait_moves()
 
             # Verify: the tool must have LEFT its dock and the grab sensor
@@ -902,6 +1037,8 @@ class FFToolchange:
         counter); we stop at three rather than energise the motor with no one
         watching."""
         dock_x, dock_y = self._dock(tool)
+        if self.soft_docking:
+            self._contact_exit(dock_x)
 
         # Sensors off first (changeExtruderChannel @0x79750c disarms before
         # the head swap): nothing the carriage does at the dock may fire a
@@ -925,29 +1062,42 @@ class FFToolchange:
             # which is the truth -- nothing is mounted.
             self._set_tool_frame(None)
             self._run('G90')
-            # Release approach: X250 then dock Y, once, outside the retry
-            # loop. There is NO X280 stage here -- that is grab-only; the
-            # release staging point is dockX-10 below.
-            self._run('G1 X%.3f F%d' % (self.x_safe, self.fast_feed))
-            self._run('G1 Y%.3f' % dock_y)
+            # Release approach to safe X / dock Y, once, outside the retry
+            # loop. The opt-in diagonal is confined to the clear corridor.
+            # There is NO X280 stage here -- that is grab-only; the release
+            # staging point is dockX-10 below.
+            self._move_to_dock_y(dock_y)
 
             for attempt in range(RELEASE_ATTEMPTS):
                 # The app emits G1 X<dock-10> with NO F (inheriting the
                 # modal feed: fast on attempt 1, the slow feed on retries)
                 # and the final mate at the release slow feed.
-                self._run('G1 X%.3f' % (dock_x - RELEASE_STAGE_BACKOFF))
-                self._run('G1 X%.3f F%d' % (dock_x, self.release_slow_feed))
+                if self.soft_docking:
+                    callback = (self.release_overlap.overlap_prepare(tool)
+                                if self.release_overlap is not None else None)
+                    self._soft_seat(dock_x, on_brake=callback)
+                else:
+                    self._run('G1 X%.3f' % (dock_x - RELEASE_STAGE_BACKOFF))
+                    self._run('G1 X%.3f F%d' % (dock_x, self.release_slow_feed))
                 self._wait_moves()
 
-                # Unlock only once the dock sensor confirms the tool has
-                # seated -- releasing early drops the tool on the floor.
+                # Endpoint confirmation remains mandatory before retreat.
+                # The optional file-output experiment starts on supported rail.
                 if not self._poll_until(lambda: self._in_location(tool),
                                         SEAT_TIMEOUT):
+                    if self.release_overlap is not None:
+                        self.release_overlap.overlap_abort(tool)
+                        raise FFToolchangeError(
+                            'T%d release failed: missing endpoint seating confirmation' % tool)
                     logging.info(
                         "ff_toolchange: release attempt %d/%d for T%d: tool"
                         " never read as seated, re-approaching",
                         attempt + 1, RELEASE_ATTEMPTS, tool)
                     continue
+
+                if self.release_overlap is not None:
+                    self.release_overlap.overlap_finish(tool)
+                    break
 
                 for _ in range(RELEASE_RETRIES):
                     try:
@@ -976,8 +1126,11 @@ class FFToolchange:
             # Retreat happens only on success; on failure the app leaves the
             # carriage at the dock (and so do we -- the finally-clause only
             # de-energises and restores limits, it does not move).
-            self._run('G1 X%.3f F%d'
-                      % (self.x_safe, self.release_retreat_feed))
+            if self.soft_docking:
+                self._empty_withdraw(self.x_safe)
+            else:
+                self._run('G1 X%.3f F%d'
+                          % (self.x_safe, self.release_retreat_feed))
             self._wait_moves()
 
             # Verify: tool in its dock AND nothing held.

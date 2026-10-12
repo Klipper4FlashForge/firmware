@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Creator 5 · Toolchange replay</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#101722;color:#e7edf7;font:15px system-ui,sans-serif}main{max-width:1100px;margin:36px auto;padding:0 24px}h1{font-size:28px;margin:0 0 8px}.muted{color:#9eafc6}.grid{display:grid;grid-template-columns:1.25fr 1fr;gap:24px;margin:24px 0}.panel{background:#192434;border:1px solid #2b3b51;border-radius:14px;padding:20px}canvas{width:100%;height:auto;background:#111b29;border-radius:8px}button,select{background:#2b4059;color:white;border:1px solid #415b79;padding:9px 14px;border-radius:7px;cursor:pointer}input{width:100%;accent-color:#6be2c1}.controls{display:flex;gap:12px;align-items:center;margin:14px 0}#clock{font-variant-numeric:tabular-nums}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px;border-bottom:1px solid #304056}th{color:#9eafc6;font-weight:500}#events{height:180px;overflow:auto;font:12px ui-monospace,monospace;line-height:1.8}.badge{color:#6be2c1}#error{color:#ff9b9b;white-space:pre-wrap}.legend{display:flex;gap:16px;margin:12px 0}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px}@media(max-width:750px){.grid{grid-template-columns:1fr}}
+</style>
+<main>
+<h1>Creator 5 <span class="muted">/ Toolchange replay</span></h1>
+<p class="muted">Actual Klipper motion planning and AFC swap logic. Dock geometry, lock delays and thermal response are simulated.</p>
+<div class="grid">
+<section class="panel">
+<canvas id="printer" width="620" height="560" aria-label="Top view of carriage and four tool docks"></canvas>
+<canvas id="zplot" width="620" height="180" aria-label="Z movement timeline including travel below zero"></canvas>
+<div class="controls"><label for="velocity-scale">Velocity scale</label><select id="velocity-scale"><option value="150">150 mm/s</option><option value="500">500 mm/s</option><option value="30">30 mm/s · contact</option></select></div>
+<canvas id="vplot" width="620" height="180" aria-label="Planned carriage velocity including segmented braking"></canvas>
+<div class="controls"><button id="play">Play</button><button id="restart">Restart</button><select id="speed" aria-label="Playback speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="5">5×</option></select><span id="clock"></span></div>
+<input id="seek" type="range" min="0" step="any" value="0" aria-label="Replay time">
+<p id="state"></p><div class="legend" id="legend"></div>
+</section>
+<section class="panel">
+<h2 style="margin-top:0">Swap measurements</h2>
+<p id="summary" class="badge"></p>
+<h3>Between tools · return complete (seconds)</h3>
+<table><thead><tr><th>From / To</th><th>T0</th><th>T1</th><th>T2</th><th>T3</th></tr></thead><tbody id="pairs"></tbody></table>
+<h3>Selections in this run</h3>
+<table><thead><tr><th>Selection</th><th>AFC swap</th><th>Return complete</th><th>All motors complete</th><th>Motor tail</th></tr></thead><tbody id="selections"></tbody></table>
+<p class="muted">AFC swap ends at “Tool swap done”. Return complete includes travel back to the saved print position. All motors complete includes any asynchronous lock movement still running after return. Motor completion does not prove successful physical locking. An empty-carriage pickup is listed separately.</p>
+<details id="unlock-preview" hidden><summary>Early-unlock timing reference</summary>
+<p class="muted">Candidate starts at gentle braking, within the estimated support span. Requires dock-sensor confirmation and concurrent endstop monitoring; The profile label below distinguishes a timing reference from the simulator-only overlap prototype.</p>
+<table><thead><tr><th>Release</th><th>Candidate</th><th>Approach remaining</th><th>Unlock estimate</th><th>Maximum overlap</th><th>Wait at D0</th><th>Motor start delay</th><th>Actual moving overlap</th></tr></thead><tbody id="unlock-preview-rows"></tbody></table></details>
+<h3>Mechanical phases</h3>
+<table><thead><tr><th>Phase</th><th>Duration</th></tr></thead><tbody id="phases"></tbody></table>
+<p id="model" class="muted"></p>
+<p id="error"></p>
+<p id="brush-warning" style="color:#ffcc75"></p>
+<h3>Events</h3><div id="events"></div>
+</section>
+</div>
+<p class="muted">Times use the planned printer clock, not desktop execution time. Physical lock and heat behavior need calibration against the printer. No MCU firmware or mechanics are emulated.</p>
+</main>
+<script id="trace" type="application/json">__TRACE_JSON__</script>
+<script>
+'use strict';
+const data=JSON.parse(document.getElementById('trace').textContent);
+const $=id=>document.getElementById(id), canvas=$('printer'),ctx=canvas.getContext('2d');
+const colors=['#6be2c1','#72b6ff','#ffcc75','#cb9aff'];
+const begin=data.begin??0,end=data.summary.all_motion_complete_at??data.end,duration=end-begin;
+const events=[...data.events].sort((a,b)=>a.time-b.time);
+const moves=[...data.moves].sort((a,b)=>a.time-b.time);
+const seek=$('seek');seek.max=duration;
+const travel=data.model.travel_limits??[[-5,310],[-5,260],[-10,270]];
+let elapsed=0,playing=false,previous=null;
+function moveDuration(m){return m.accel_t+m.cruise_t+m.decel_t}
+function position(m,t){
+ const dt=Math.max(0,Math.min(moveDuration(m),t-m.time));
+ const a=Math.min(dt,m.accel_t),c=Math.max(0,Math.min(dt-m.accel_t,m.cruise_t)),d=Math.max(0,dt-m.accel_t-m.cruise_t);
+ const distance=m.start_v*a+0.5*m.accel*a*a+m.cruise_v*c+m.cruise_v*d-0.5*m.accel*d*d;
+ return m.start.map((v,i)=>v+m.direction[i]*distance);
+}
+function velocity(m,t){const dt=t-m.time;if(dt<0||dt>=moveDuration(m))return 0;if(dt<m.accel_t)return m.start_v+m.accel*dt;if(dt<m.accel_t+m.cruise_t)return m.cruise_v;return m.cruise_v-m.accel*(dt-m.accel_t-m.cruise_t)}
+function rubberSpan(m){if(!data.model.soft_docking||!m.phase.startsWith('grab ')&&!m.phase.startsWith('release ')||m.direction[0]<0&&m.mounted===null)return null;const dock=data.model.docks[Number(m.phase.split('T').at(-1))],endpos=position(m,m.time+moveDuration(m));if(Math.abs(m.start[1]-dock[1])>1e-5||Math.abs(endpos[1]-dock[1])>1e-5)return null;const low=Math.max(Math.min(m.start[0],endpos[0]),dock[0]-data.model.contact_depth),high=Math.min(Math.max(m.start[0],endpos[0]),dock[0]);if(high-low<1e-5)return null;const crossing=x=>{let a=m.time,b=m.time+moveDuration(m);for(let i=0;i<35;i++){const mid=(a+b)/2;if((position(m,mid)[0]<x)===(m.direction[0]>0))a=mid;else b=mid}return(a+b)/2};const times=[crossing(low),crossing(high)].sort((a,b)=>a-b);return times}
+function point(p){return [40+(p[0]-travel[0][0])*512/(travel[0][1]-travel[0][0]),500-(p[1]-travel[1][0])*429/(travel[1][1]-travel[1][0])]}
+function text(message,x,y,color='#9eafc6'){ctx.fillStyle=color;ctx.font='14px system-ui';ctx.fillText(message,x,y)}
+function render(){
+ const t=begin+elapsed;
+ ctx.clearRect(0,0,canvas.width,canvas.height);
+ ctx.strokeStyle='#304056';ctx.lineWidth=1;
+ for(let n=0;n<=300;n+=50){const [x]=point([n,0]);const [,y]=point([0,n]);ctx.beginPath();ctx.moveTo(x,40);ctx.lineTo(x,500);ctx.stroke();ctx.beginPath();ctx.moveTo(40,y);ctx.lineTo(552,y);ctx.stroke();text(String(n),x,523)}
+ ctx.strokeStyle='#54708e';ctx.strokeRect(40,71,512,429);text('X → (mm)',270,549);text('Y ↑',8,40);
+ const [safeX]=point([245,0]);ctx.setLineDash([5,5]);ctx.strokeStyle='#a88d56';ctx.beginPath();ctx.moveTo(safeX,71);ctx.lineTo(safeX,500);ctx.stroke();ctx.setLineDash([]);text('X245',safeX-17,62,'#ffcc75');
+ const [brushX,brushY]=point([264,7]);const [brushEnd]=point([271,7]);ctx.fillStyle='#ffcc75';ctx.fillRect(brushX-2,brushY-4,brushEnd-brushX+4,8);text('rubber',brushX-44,brushY-12,'#ffcc75');
+ const state=events.filter(e=>e.time<=t&&e.docked).at(-1)??{mounted:null,docked:[true,true,true,true],locked:false};
+ const motion=moves.filter(m=>m.time<=t).at(-1);
+ const pos=motion?position(motion,t):[150,150,10];
+ ctx.strokeStyle='#477466';ctx.lineWidth=2;
+ ctx.beginPath();for(const m of moves){if(m.time>t)break;const p=point(m.start);const q=point(position(m,t));ctx.moveTo(...p);ctx.lineTo(...q)}ctx.stroke();
+ data.model.docks.forEach((dock,i)=>{const [x,y]=point(dock);ctx.fillStyle='#304056';ctx.fillRect(x-14,y-20,30,40);ctx.strokeStyle=colors[i];ctx.strokeRect(x-14,y-20,30,40);text('T'+i,x-43,y+5,colors[i]);if(state.docked[i]){ctx.fillStyle=colors[i];ctx.beginPath();ctx.arc(x,y,9,0,Math.PI*2);ctx.fill()}});
+ if(data.model.dock_support_depth){for(const dock of data.model.docks){const a=point([dock[0]-data.model.dock_support_depth,dock[1]]),b=point(dock);ctx.strokeStyle='#83b9a5';ctx.lineWidth=2;ctx.setLineDash([3,3]);ctx.beginPath();ctx.moveTo(...a);ctx.lineTo(...b);ctx.stroke();ctx.setLineDash([])}}
+ if(data.model.soft_docking){for(const dock of data.model.docks){const a=point([dock[0]-data.model.contact_depth,dock[1]]),b=point(dock);ctx.strokeStyle='#e88b9c';ctx.lineWidth=6;ctx.beginPath();ctx.moveTo(...a);ctx.lineTo(...b);ctx.stroke();const stop=point(dock);ctx.fillStyle='#ffcc75';ctx.fillRect(stop[0]-2,stop[1]-5,4,10)}}
+ const [x,y]=point(pos);ctx.fillStyle=state.mounted===null?'#e7edf7':colors[state.mounted];ctx.fillRect(x-11,y-11,22,22);ctx.strokeStyle='#fff';ctx.strokeRect(x-13,y-13,26,26);
+ const phase=events.filter(e=>e.time<=t&&e.kind==='phase').at(-1);
+ const waiting=events.find(e=>e.kind==='wait'&&e.start<=t&&t<e.time);
+ const unlocking=events.find(e=>e.kind==='async_unlock_start'&&e.time<=t&&t<e.completion_estimate);
+ const motorPending=(data.motor_moves??[]).some(m=>m.time<=t&&t<m.time+m.duration);
+ const activity=elapsed>=duration?(data.summary.errors.length?'Fault · latch '+(data.summary.latch_state??'unverified'):'Complete'):t>=data.end&&motorPending?'Lock motor finishing':waiting?.reason??(motion&&t<motion.time+moveDuration(motion)?(unlocking?'Docking + unlock':motion.phase):(unlocking?'Unlocking at dock':phase?.label??'Ready'));
+ $('state').textContent=`${activity} · Head ${state.mounted===null?'empty':'T'+state.mounted} · ${state.locked?'locked':'unlocked'} · Machine XYZ ${pos.map(v=>v.toFixed(1)).join(', ')} · ${motion?velocity(motion,t).toFixed(1):'0.0'} mm/s`;
+ $('clock').textContent=`${elapsed.toFixed(2)} / ${duration.toFixed(2)} s`;seek.value=elapsed;
+ drawZ(t,pos[2]);
+ drawVelocity(t);
+ const shown=events.filter(e=>e.time<=t&&e.time>=begin);
+ $('events').replaceChildren(...shown.map(e=>{const row=document.createElement('div');row.textContent=`${(e.time-begin).toFixed(3)}  ${e.kind}  ${e.label??e.action??e.reason??e.sensor??''}`;return row}));$('events').scrollTop=$('events').scrollHeight;
+}
+function drawZ(t,z){
+ const plot=$('zplot'),c=plot.getContext('2d');c.clearRect(0,0,plot.width,plot.height);
+ const relevant=moves.filter(m=>m.time+moveDuration(m)>=begin&&m.time<=end);
+ const levels=relevant.flatMap(m=>[m.start[2],position(m,m.time+moveDuration(m))[2]]);
+ const low=Math.min(-1,...levels)-.5,high=Math.max(5,...levels)+1;
+ const px=time=>40+(time-begin)*512/Math.max(duration,.001),py=value=>135-(value-low)*95/(high-low);
+ c.fillStyle='#442831';c.fillRect(40,py(0),512,135-py(0));c.strokeStyle='#92717a';c.beginPath();c.moveTo(40,py(0));c.lineTo(552,py(0));c.stroke();
+ c.fillStyle='#9eafc6';c.font='13px system-ui';c.fillText(`Z ${z.toFixed(2)} mm · allowed ${travel[2][0]}…${travel[2][1]} mm`,40,24);c.fillText('0',18,py(0)+4);c.fillText('Below Z0',43,153);
+ c.strokeStyle='#6be2c1';c.lineWidth=2;c.beginPath();
+ for(const m of relevant){const start=Math.max(begin,m.time),stop=Math.min(end,m.time+moveDuration(m));c.moveTo(px(start),py(position(m,start)[2]));for(let i=1;i<=12;i++){const at=start+(stop-start)*i/12;c.lineTo(px(at),py(position(m,at)[2]))}}c.stroke();
+ c.strokeStyle='#e7edf7';c.beginPath();c.moveTo(px(t),40);c.lineTo(px(t),135);c.stroke();
+}
+function drawVelocity(t){const c=$('vplot').getContext('2d'),scale=Number($('velocity-scale').value);c.clearRect(0,0,620,180);const px=at=>40+(at-begin)*512/Math.max(duration,.001),py=v=>135-Math.min(scale,Math.max(0,v))*95/scale;c.font='13px system-ui';c.fillStyle='#9eafc6';c.fillText('Planned velocity · trapezoidal acceleration, not continuous jerk',40,24);c.fillText('0',18,139);c.fillText(String(scale),8,44);c.strokeStyle='#33485e';c.strokeRect(40,40,512,95);if(data.model.soft_docking){const y=py(data.model.contact_speed);c.strokeStyle='#e88b9c';c.setLineDash([4,4]);c.beginPath();c.moveTo(40,y);c.lineTo(552,y);c.stroke();c.setLineDash([]);c.fillStyle='#e88b9c';c.fillText(`Contact ≤${data.model.contact_speed} mm/s · empty withdrawal unrestricted`,40,157)}if(data.model.soft_docking){c.fillStyle='rgba(232,139,156,.13)';for(const m of moves){const span=rubberSpan(m);if(span&&span[1]>=begin&&span[0]<=end)c.fillRect(px(Math.max(begin,span[0])),40,px(Math.min(end,span[1]))-px(Math.max(begin,span[0])),95)}}c.strokeStyle='#72b6ff';c.lineWidth=2;c.beginPath();for(const m of moves){if(m.time+moveDuration(m)<begin||m.time>end)continue;const stop=Math.min(end,m.time+moveDuration(m)),start=Math.max(begin,m.time);c.moveTo(px(start),py(velocity(m,start)));for(const dt of [m.accel_t,m.accel_t+m.cruise_t,moveDuration(m)]){const at=Math.min(stop,Math.max(start,m.time+dt));const v=dt===moveDuration(m)?Math.max(0,m.cruise_v-m.accel*m.decel_t):velocity(m,at);c.lineTo(px(at),py(v))}}c.stroke();c.strokeStyle='#e7edf7';c.beginPath();c.moveTo(px(t),40);c.lineTo(px(t),135);c.stroke()}
+$('velocity-scale').onchange=()=>render();
+$('summary').textContent=`${data.summary.passed}/${data.summary.checks} checks passed · ${duration.toFixed(2)} s entire scenario · ${data.summary.swap_count??0} swaps${data.summary.mean_swap_seconds===null?'':` · mean ${(data.summary.mean_swap_seconds??0).toFixed(2)} s/swap · all motors ${(data.summary.mean_all_motion_seconds??data.summary.mean_swap_seconds??0).toFixed(2)} s`}`;
+$('error').textContent=data.summary.errors.join('\n');
+const violations=[...(data.brush_warnings??[]),...(data.dock_warnings??[])];
+const crossings=[...new Set(violations.flatMap(w=>(w.crossed_docks??[]).map(d=>`T${d.tool} at X${d.x.toFixed(2)}/Y${d.y.toFixed(2)}`)))];
+$('brush-warning').textContent=violations.length?`Rejected unsafe movement: ${[...new Set(violations.map(w=>w.kind))].join(', ')}.${crossings.length?' Crosses occupied '+crossings.join(', ')+'.':''}`:'';
+$('model').textContent=`Model: ${(data.model.sensor_delay*1000).toFixed(0)} ms sensor delay; ${data.model.motor_mode==='production'?'production manual-stepper commands':`${(data.model.lock_time*1000).toFixed(0)} ms fixed lock/unlock`}; ${data.model.heating_rate} °C/s heating. Geometry: ${data.model.geometry_source??'synthetic calibration fixture'}.${data.model.soft_docking?` Estimated dock support ${data.model.dock_support_depth} mm before D0; dock sensor at endpoint. Release: ${data.model.async_unlock?"simulator-only overlap prototype":"synchronous"}; unlock response ${data.model.unlock_duration_estimate??"native motor profile"}${data.model.unlock_duration_estimate?" s (estimated)":""}. Contact ${data.model.contact_depth} mm + ${data.model.contact_margin} mm margin; contact cap ${data.model.contact_speed} mm/s; last ${data.model.ease_distance} mm seating with ${data.model.contact_accel} mm/s² braking; carried rubber exit ${data.model.withdrawal_speed} mm/s, ${data.model.contact_accel} mm/s²; clear rail ${data.model.rail_speed} mm/s, ${data.model.rail_accel} mm/s²; empty exit ${data.model.empty_exit_speed} mm/s.`:''}`;
+for(const op of data.operations??[]){const row=document.createElement('tr');for(const value of [`${op.from_tool===null?'Empty':'T'+op.from_tool} → ${op.to_tool===null?'empty':'T'+op.to_tool}`,op.afc_tool_swap_seconds.toFixed(3)+' s',op.duration.toFixed(3)+' s',op.all_motion_seconds.toFixed(3)+' s',op.motor_tail_seconds.toFixed(3)+' s']){const cell=document.createElement('td');cell.textContent=value;row.append(cell)}$('selections').append(row)}
+if(data.model.async_unlock&&data.model.unlock_preview_seconds){
+ for(const m of moves){
+  if(!m.phase.startsWith('release ')||m.direction[0]<=0||Math.abs(m.accel-data.model.contact_accel)>1e-6)continue;
+  const tool=Number(m.phase.split('T').at(-1)),dock=data.model.docks[tool],finish=position(m,m.time+moveDuration(m));
+  if(Math.abs(finish[0]-dock[0])>1e-4||Math.abs(m.start[1]-dock[1])>1e-4)continue;
+  const distance=dock[0]-m.start[0];
+  if(distance>data.model.dock_support_depth)continue;
+  const remaining=moveDuration(m),unlock=data.model.unlock_preview_seconds;
+  const scheduled=events.find(e=>e.kind==='async_unlock_start'&&e.phase===m.phase&&Math.abs(e.requested_time-m.time)<1e-5);
+  const actual=scheduled?Math.max(0,Math.min(unlock,m.time+remaining-scheduled.time)):null;
+  const row=document.createElement('tr');
+  for(const value of [m.phase,`D−${distance.toFixed(2)}`,`${remaining.toFixed(3)} s`,`${unlock.toFixed(3)} s (estimated)`,`${Math.min(remaining,unlock).toFixed(3)} s`,`${Math.max(0,unlock-remaining).toFixed(3)} s`,scheduled?`${scheduled.motor_serialization_delay.toFixed(3)} s`:"—",actual===null?"—":`${actual.toFixed(3)} s`]){const cell=document.createElement('td');cell.textContent=value;row.append(cell)}
+  $('unlock-preview-rows').append(row);$('unlock-preview').hidden=false;
+ }
+}
+for(let from=0;from<4;from++){const row=document.createElement('tr');const label=document.createElement('th');label.textContent='T'+from;row.append(label);for(let to=0;to<4;to++){const matches=(data.operations??[]).filter(op=>op.kind==='swap'&&op.passed&&op.from_tool===from&&op.to_tool===to);const cell=document.createElement('td');cell.textContent=matches.length?(matches.reduce((sum,op)=>sum+op.duration,0)/matches.length).toFixed(3):'—';row.append(cell)}$('pairs').append(row)}
+for(const e of events.filter(e=>e.kind==='phase_end')){const start=events.find(s=>s.kind==='phase'&&s.label===e.label&&s.time<=e.time&&!s.used);if(start){start.used=true;const row=document.createElement('tr');for(const value of [e.label,(e.time-start.time).toFixed(3)+' s']){const cell=document.createElement('td');cell.textContent=value;row.append(cell)}$('phases').append(row)}}
+colors.forEach((color,i)=>{const span=document.createElement('span');const dot=document.createElement('i');dot.className='dot';dot.style.background=color;span.append(dot,'T'+i);$('legend').append(span)});
+function play(){playing=!playing;if(elapsed>=duration)elapsed=0;$('play').textContent=playing?'Pause':'Play';previous=null}
+$('play').onclick=play;$('restart').onclick=()=>{elapsed=0;render()};seek.oninput=()=>{const value=Number(seek.value);elapsed=duration-value<1e-9?duration:value;render()};
+function frame(now){if(playing&&previous!==null){elapsed=Math.min(duration,elapsed+(now-previous)/1000*Number($('speed').value));if(elapsed>=duration){playing=false;$('play').textContent='Play'}render()}previous=now;requestAnimationFrame(frame)}
+render();requestAnimationFrame(frame);
+</script>
+</html>
