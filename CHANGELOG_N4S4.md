@@ -271,6 +271,39 @@ New commands: `TOOLCHANGE_SET_PRIME_TOWER`, `TOOLCHANGE_PREPARE_PICKUP`,
 - Like the tool-change hooks, these calls do nothing without `[ff_stats]`
   and cannot fail a print.
 
+### The file is read in a thread
+
+- The lag watch's first report (2026-10-14) was `ff_print.py:168`: at the
+  start of a job the search for the second tool read 256 KiB line by line in
+  Klipper's thread, 0.7 s on this CPU, with 0.26 s of motion still queued.
+- `_cmd_start` now runs `_parse_metadata` (and the extents scan below) in a
+  thread named `ff_print-scan` and waits with `reactor.pause` in steps of
+  50 ms, so clock sync, the heaters and queued motion go on. An error in the
+  thread reaches the start as before; without a reactor (the unit tests) it
+  just waits.
+
+### A file that does not fit the machine is refused
+
+- With `check_bounds` (default on, `[ff_print]`) the whole file is read once
+  for the positions it moves to: X and Y at both ends, Z at the top, in
+  machine coordinates, i.e. with the offset of the tool mounted at that point
+  (`ff_toolchange.offset_x/y/z`; the initial tool before the first `Tn`). The
+  limits are the toolhead's `axis_minimum` / `axis_maximum`. Comments, `G28`,
+  `G92`, relative stretches (`G91` to `G90`) are not positions; arcs count by
+  their end points.
+- A file beyond the range is refused with `gcmd.error` before the statistics,
+  the start macro and the base command, so nothing heats or moves and no job
+  is recorded; the message names the axis, the value, the G-code value and the
+  tool offset, and the limit. On 2026-10-14 the file of the aborted job
+  reached Y 260.018 for T1, whose nozzle sits 0.414 mm further out; the
+  printer reaches Y 260.0.
+- Checked against the 57 G-code files on the printer on 2026-10-14: one
+  refusal, that file; none of the others. The scan takes 0.1 to 2.9 s per
+  file (about a second per megabyte), in pieces of 16 KiB with a pause between
+  them; a file that takes longer than 40 s is started unchecked.
+- `printer.ff_print.extents` holds what was found (`x_min` ... `z_max`, machine
+  coordinates). `check_bounds: False` turns the check off.
+
 ## `/usr/data/anvil/klipper/klippy/extras/ff_stats.py`
 
 New file. User documentation: `docs/statistics.md`.
@@ -479,6 +512,9 @@ ships `restore_axis` unset, and everything else off); these are the values
 ### Lag watch
 
 - `[ff_lagwatch]` loads the lag watch with its defaults.
+
+`[ff_print]` is not set in this file: `check_bounds` is on by default in the
+module.
 
 ### Other pre-existing local changes
 

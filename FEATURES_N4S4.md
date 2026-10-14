@@ -36,7 +36,7 @@ it adds on top of it and tries not to rewrite any of it.
 | Extended Klipper extras | `ff_toolchange` (+431 / −22), `ff_print` (+80 / −7) |
 | New configuration | `printer_n4s4.cfg` (about 960 lines): new macros, redefined macros, one startup `delayed_gcode` |
 | Buttons added to Mainsail | `TOOLCHANGE_STATUS`, `START_PURGE_SET`, `START_PURGE_STATUS`, `TIMELAPSE_TOGGLE`, `FF_STATS`, `FF_STATS_JOB`, `FF_STATS_JOBS` (`ADAPTIVE_MESH_TOGGLE` and `ADAPTIVE_MESH_STATUS` are the original's now) |
-| Tests | 632 static tests in the build image (2 more are skipped), of which the original's own run unmodified; the replica lane on a Creator 5 replica is run for a release |
+| Tests | 670 static tests in the build image (2 more are skipped), of which the original's own run unmodified; the replica lane on a Creator 5 replica is run for a release |
 | Tested on | one Creator 5 (not the Pro), OrcaSlicer 2.4.x |
 
 ### Ground rules it follows
@@ -145,6 +145,8 @@ homing) are the original's now.
 | Feature | What it does |
 |---|---|
 | **Every used tool is known** | `ff_print` reads Orca's compact `; filament:` header (a file without it: a streaming scan of `Tn` that gives up after 2 s) and exposes `printer.ff_print.tools`. `_NS_BEFORE_PRINT` reads it; the original's start macro does not get it, because it would clean every tool. It feeds the checks of every print (`_FF_PREFLIGHT`: each used tool installed and calibrated; `_NS_FILAMENT_PREFLIGHT`) and, in purge mode `ALL`, the clean of every colour. The original left this out on purpose. |
+| **A file beyond the machine is refused** | `check_bounds` (on by default): the whole file is read once for the positions it moves to, with the mounted tool's offset added, and refused before anything heats if it goes beyond the axis range (X and Y at both ends, Z at the top). Without it a prime tower 0.018 mm too far out failed two minutes into a job (2026-10-14), after heating and meshing. Checked against the 57 files on the printer: one refusal, that one. See `docs/how-a-print-runs.md`. |
+| **The file is read in a thread** | The scan of the file at the start used to hold Klipper's thread for 0.7 s (found by the lag watch). It runs in a thread now while the start waits with `reactor.pause`. |
 | **`ADAPTIVE_MESH` additions** | `PLATE=<code>` (the build-plate correction, section 4), `TOOLCHANGE_PREPARE_PICKUP` before the first pickup, and the preheat of the file's second tool once the mesh is done (see below). The rest of the macro is the original's. |
 | **`DEFINE_PRIME_TOWER_OBJECT` addition** | One line: the toolchanger is given the same rectangle (section 1). |
 | **Filament preflight** | `_NS_FILAMENT_PREFLIGHT` checks the `fd_exN` switch of every used tool, independent of the purge mode. |
@@ -524,6 +526,10 @@ Each has its evidence level.
 - **Tool-change times** exclude the short return travel to the print
   position, and phase times can be a couple of seconds early because Klipper
   processes G-code ahead of the motion.
+- **File range check (2026-10-14):** run over all 57 G-code files on the
+  printer with the printer's own Python: one refusal (the file that failed),
+  no false refusal; 0.1 to 2.9 s per file. Not yet run through a real job
+  start.
 - **Host stalls (2026-10-14):** the `Timer too close` of that day was traced
   from the log to one stall of Klipper's main thread of about a second, and
   the mechanism (the braking steps of a move leave the host from a timer

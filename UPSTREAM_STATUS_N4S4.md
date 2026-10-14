@@ -118,6 +118,13 @@ too if N4S4 ever defines a seventh macro the original already has.
   (`printer.ff_print.next_tool`, `next_nozzle`), looked for only in the first
   256 KiB; `ADAPTIVE_MESH` heats that tool with them.
 * The job hooks for `[ff_stats]`, which do nothing without that section.
+* The read of the file runs in a thread while the start waits with
+  `reactor.pause` (the original runs it in Klipper's thread: 0.7 s on this CPU,
+  caught by the lag watch on 2026-10-14).
+* `check_bounds` (on by default): the file is read once for the positions it
+  moves to and refused before anything happens if it goes beyond the axis
+  range, with the mounted tool's offset added. General for any printer;
+  a candidate to offer.
 
 ---
 

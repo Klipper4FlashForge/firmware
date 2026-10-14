@@ -84,6 +84,23 @@ Stalls are rare, so the watch is quiet; `FF_LAGWATCH` lists the recent ones
 and `printer.ff_lagwatch.stalls` is the count. Without a stall there is
 nothing in the log but one line at start.
 
+## The first thing the lag watch found
+
+On its first job, the watch reported a stall that had nothing to do with tool
+changes:
+
+```
+ff_lagwatch: the main thread was away for 0.70 s (stall 1) [the MCUs had 0.26 s of motion queued]; it was in: ff_print.py:168 _parse_metadata <- ff_print.py:483 _cmd_start <- ...
+```
+
+At the start of every job `ff_print` reads the head of the file line by line
+(for the second tool and its preheat), and on this CPU 256 KiB take 0.7 s. It
+ran in Klipper's thread, the one that also answers the MCUs and keeps the
+heaters alive. It now runs in a thread of its own while the start waits with
+`reactor.pause`, so the reactor goes on; the file is read in pieces of 16 KiB
+so that no other thread waits longer than about 30 ms. The same thread reads
+the file's extents for the [range check](how-a-print-runs.md#a-file-that-does-not-fit-the-machine).
+
 ## Options
 
 `[ff_toolchange]`
