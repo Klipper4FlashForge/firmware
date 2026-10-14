@@ -273,7 +273,7 @@ See the table in `UPSTREAM_STATUS_N4S4.md` (what and why) and
   `test_ff_toolchange.py`, `test_ff_lagwatch.py`, `test_ff_print_bounds.py`,
   `test_n4s4_include_installer.py`, `test_timelapse_config.py`,
   `test_klipper_config.py` (additions);
-  `qa/replica/`: `test_ff_stats.py`, `test_custom_scripts.py` (additions).
+  `qa/replica/`: `test_ff_stats_on_real_klipper.py`, `test_custom_scripts.py` (additions).
 - Documents: `docs/statistics.md`, `docs/host-stalls.md`,
   `docs/how-a-print-runs.md` (a section), `docs/ssh-keys.md`, `UPSTREAM_STATUS_N4S4.md`,
   `FEATURES_N4S4.md`, `CHANGELOG_N4S4.md`, `ORCA_MACHINE_AND_FILAMENT_SETTINGS.md`,

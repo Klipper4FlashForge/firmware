@@ -420,7 +420,7 @@ N4S4 tests at their end.
     lip wipe, cooldown grid).
   - `test_n4s4_include_installer`, `test_timelapse_config`, and additions to
     `test_klipper_config` (the 24 V pin owner with N4S4 loaded).
-- **Replica:** `qa/replica/test_ff_stats.py` runs the installed `ff_stats`
+- **Replica:** `qa/replica/test_ff_stats_on_real_klipper.py` runs the installed `ff_stats`
   against Klipper's real `gcode.py` and `print_stats.py` on the printer's own
   Python; `test_custom_scripts` installs and runs the include installer. The
   whole replica lane (167 tests) passed on the Creator 5 package built from
