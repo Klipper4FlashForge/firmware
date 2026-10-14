@@ -424,7 +424,9 @@ N4S4 tests at their end.
   against Klipper's real `gcode.py` and `print_stats.py` on the printer's own
   Python; `test_custom_scripts` installs and runs the include installer. The
   whole replica lane (167 tests) passed on the Creator 5 package built from
-  this branch on 2026-10-06.
+  this branch on 2026-10-06, and again on 2026-10-14 (the first run had one
+  failure, in a test of this branch that read the statistics file before the
+  writer thread had written it; the test now waits for the thread).
 - **Behaviour parity with branch 01:** the tool-change module was compared
   with the previous branch's on about 134,000 scenario combinations (see
   *Status and limits*). That check is a one-off script, not part of the suite.
