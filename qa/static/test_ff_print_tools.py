@@ -174,7 +174,8 @@ def _announce(tmp_path, text):
     config = SimpleNamespace(
         get_printer=lambda: printer,
         get=lambda name, default=None: default,
-        getlist=lambda name, default=None: default)
+        getlist=lambda name, default=None: default,
+        getboolean=lambda name, default=None: default)
     ff = module.FFPrint(config)
     ff.previous_handlers["SDCARD_PRINT_FILE"] = lambda gcmd: None
     ff._cmd_start("SDCARD_PRINT_FILE",
