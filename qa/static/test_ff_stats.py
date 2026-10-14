@@ -4,6 +4,7 @@ import configparser
 import importlib.util
 import json
 import re
+import threading
 import types
 
 import jinja2
@@ -197,7 +198,8 @@ def rig(mod, tmp_path):
     rig.extruder = lambda tool: printer.objects[
         'extruder' if tool == 0 else 'extruder%d' % tool]
     rig.send = printer.send_event
-    return rig
+    yield rig
+    stats._stop_writer()            # no writer thread outlives its test
 
 
 def _run_job(rig, tool_moves, end='complete'):
@@ -596,6 +598,7 @@ def test_a_failing_stats_module_cannot_break_a_toolchange(ff_toolchange):
 
 def test_statistics_survive_a_restart(rig, mod):
     _run_job(rig, [(0, 100., 60.)])
+    rig.stats.flush()                     # the end-of-job save is a thread's
     assert rig.path.exists()
 
     # a restart is a new printer object reading the same file
@@ -629,13 +632,176 @@ def test_an_open_job_is_saved_every_minute_even_when_nothing_happens(rig):
     reactor.advance(30.)
     rig.extruder(0).last_position += 10.
     stats._poll(reactor.monotonic())                # too early: no write
+    stats.flush()
     assert json.loads(rig.path.read_text())['open_job']['filament_mm'][0] == 0.
 
     reactor.advance(40.)                            # 70 s since the save
     rig.extruder(0).last_position += 5.
     stats._poll(reactor.monotonic())
+    stats.flush()
     on_disk = json.loads(rig.path.read_text())
     assert on_disk['open_job']['filament_mm'][0] == 15.
+
+
+# ---------------------------------------------- the writer thread
+
+def _gate_writes(stats):
+    """Make the file calls of `stats` wait until the test lets them go.
+
+    Returns (entered, release, seen): `entered` is set when a write has
+    started, `release` lets it finish, and `seen` collects the thread name and
+    the statistics of every write."""
+    entered, release, seen = threading.Event(), threading.Event(), []
+    real = stats._write
+
+    def held(text):
+        seen.append((threading.current_thread().name, json.loads(text)))
+        entered.set()
+        assert release.wait(5.), "the test never released the writer"
+        return real(text)
+
+    stats._write = held
+    return entered, release, seen
+
+
+def _set_mm(stats, mm):
+    stats.data['lifetime']['filament_mm'][0] = mm
+
+
+def _mm_on_disk(rig):
+    return json.loads(rig.path.read_text())['lifetime']['filament_mm'][0]
+
+
+def test_the_periodic_save_does_not_wait_for_the_disk(rig):
+    stats, reactor = rig.stats, rig.reactor
+    entered, release, seen = _gate_writes(stats)
+    stats.note_job_prepare("/gcodes/p.gcode", "SDCARD_PRINT_FILE")
+    rig.ps.state = 'printing'
+    reactor.advance(70.)
+
+    stats._poll(reactor.monotonic())    # returns while the write is held up
+
+    assert entered.wait(5.)
+    assert seen[0][0] == 'ff_stats-writer'
+    assert not rig.path.exists()
+    release.set()
+    assert stats.flush()
+    assert json.loads(rig.path.read_text())['open_job']['status'] == 'open'
+
+
+def test_the_end_of_a_job_is_written_from_the_thread_too(rig):
+    entered, release, seen = _gate_writes(rig.stats)
+
+    _run_job(rig, [(0, 100., 60.)])         # returns with the write held up
+
+    assert entered.wait(5.)
+    assert seen[0][0] == 'ff_stats-writer'
+    release.set()
+    assert rig.stats.flush()
+    assert json.loads(rig.path.read_text())['lifetime']['jobs']['completed']         == 1
+
+
+def test_unwritten_saves_are_replaced_by_the_newest(rig):
+    stats = rig.stats
+    entered, release, seen = _gate_writes(stats)
+    _set_mm(stats, 1.)
+    stats.save(wait=False)
+    assert entered.wait(5.)                 # the writer holds the first text
+    for mm in (2., 3.):
+        _set_mm(stats, mm)
+        stats.save(wait=False)              # these two queue behind it
+
+    release.set()
+
+    assert stats.flush()
+    assert [t['lifetime']['filament_mm'][0] for _, t in seen] == [1., 3.]
+    assert _mm_on_disk(rig) == 3.
+
+
+def test_a_save_that_waits_comes_after_the_writer_and_wins(rig):
+    stats = rig.stats
+    entered, release, seen = _gate_writes(stats)
+    _set_mm(stats, 1.)
+    stats.save(wait=False)
+    assert entered.wait(5.)
+    _set_mm(stats, 2.)
+    stats.save(wait=False)                  # waits behind the first
+    _set_mm(stats, 3.)
+    done = []
+    caller = threading.Thread(target=lambda: done.append(stats.save()))
+    caller.start()
+    caller.join(0.3)
+    assert caller.is_alive(), "a save that waits overtook the writer"
+
+    release.set()
+    caller.join(5.)
+
+    assert done == [True]
+    assert stats.flush()
+    assert [t['lifetime']['filament_mm'][0] for _, t in seen] == [1., 3.]
+    assert _mm_on_disk(rig) == 3.
+
+
+def test_no_periodic_save_starts_inside_a_tool_change(rig):
+    stats, reactor = rig.stats, rig.reactor
+    stats.note_job_prepare("/gcodes/p.gcode", "SDCARD_PRINT_FILE")
+    rig.ps.state = 'printing'
+    stats._poll(reactor.monotonic())
+    stats.save()                                    # the start of the job
+    token = stats.toolchange_begin(1)
+    reactor.advance(70.)
+    rig.extruder(0).last_position += 10.
+
+    stats._poll(reactor.monotonic())                # due, a change is running
+    stats.flush()
+    assert json.loads(rig.path.read_text())['open_job']['filament_mm'][0] == 0.
+
+    stats.toolchange_end(token, 0, 1, True)
+    stats._poll(reactor.monotonic())                # the change is over
+    stats.flush()
+    assert json.loads(rig.path.read_text())['open_job']['filament_mm'][0] == 10.
+
+
+def test_a_change_that_never_ends_cannot_starve_the_file(rig):
+    stats, reactor = rig.stats, rig.reactor
+    stats.note_job_prepare("/gcodes/p.gcode", "SDCARD_PRINT_FILE")
+    rig.ps.state = 'printing'
+    stats._poll(reactor.monotonic())
+    stats.save()
+    stats.toolchange_begin(1)                       # and never ends
+    reactor.advance(rig.mod.SAVE_DEFER_LIMIT * stats.job_save_interval + 1.)
+    rig.extruder(0).last_position += 4.
+
+    stats._poll(reactor.monotonic())
+    stats.flush()
+
+    assert json.loads(rig.path.read_text())['open_job']['filament_mm'][0] == 4.
+
+
+def test_a_failed_background_write_is_tried_again(rig, tmp_path):
+    stats = rig.stats
+    (tmp_path / "blocker").write_text("a file where a directory is needed")
+    stats.path = str(tmp_path / "blocker" / "x.json")
+
+    assert stats.save(wait=False) is True           # handed over, not written
+    assert stats.flush()
+
+    assert stats._dirty is True                     # so the next interval saves
+
+
+def test_disconnect_stops_the_writer_and_later_saves_still_land(rig):
+    stats = rig.stats
+    stats.save(wait=False)
+    assert stats.flush()
+    writer = stats._writer
+    assert writer.is_alive()
+
+    rig.send('klippy:disconnect')
+
+    assert not writer.is_alive()
+    _set_mm(stats, 7.)
+    assert stats.save(wait=False) is True           # written here: no writer
+    assert _mm_on_disk(rig) == 7.
 
 
 def test_an_unreadable_file_is_kept_aside_not_overwritten(mod, tmp_path):

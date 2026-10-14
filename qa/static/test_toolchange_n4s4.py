@@ -507,6 +507,66 @@ def test_the_corridor_option_is_read_from_the_config():
 
 
 # ---------------------------------------------------------------------------
+# The wait that ends every dock step
+# ---------------------------------------------------------------------------
+
+def waiting_toolchange(**options):
+    """A bare FFToolchange whose real _wait_moves talks to a recording
+    toolhead; returns it, the list of calls and the toolhead."""
+    module = load_module()
+    tc = module.FFToolchange.__new__(module.FFToolchange)
+    calls = []
+    toolhead = SimpleNamespace(
+        flush_step_generation=lambda: calls.append("flush_step_generation"),
+        wait_moves=lambda: calls.append("wait_moves"))
+    tc.printer = SimpleNamespace(
+        lookup_object=lambda name, default=None: toolhead)
+    for name, value in options.items():
+        setattr(tc, name, value)
+    return tc, calls, toolhead
+
+
+def test_a_wait_sends_the_last_steps_before_it_starts_waiting():
+    """Klipper keeps the steps that start within ~50 ms of a move's end back
+    until a later flush, and while the queue drains that flush is a timer 0.2 s
+    ahead of them. A stall of the host then in the middle of the move shuts
+    the MCU down (Timer too close, T3's dock, 2026-10-14). Flushing first puts
+    all of the motion on the MCU; the wait itself is unchanged."""
+    tc, calls, _ = waiting_toolchange(flush_steps_before_wait=True)
+
+    tc._wait_moves()
+
+    assert calls == ["flush_step_generation", "wait_moves"]
+
+
+def test_without_the_option_a_wait_is_klippers_own():
+    tc, calls, _ = waiting_toolchange()
+
+    tc._wait_moves()
+
+    assert calls == ["wait_moves"]
+
+
+def test_a_toolhead_without_the_flush_is_waited_on_all_the_same():
+    """Any non-CommandError from a gcode handler shuts the printer down, so a
+    toolhead that lacks the call must not turn a wait into one."""
+    tc, calls, toolhead = waiting_toolchange(flush_steps_before_wait=True)
+    del toolhead.flush_step_generation
+
+    tc._wait_moves()
+
+    assert calls == ["wait_moves"]
+
+
+def test_the_flush_option_is_read_from_the_config():
+    tc, _ = build(flush_steps_before_wait=1)
+    plain, _ = build()
+
+    assert tc.flush_steps_before_wait is True
+    assert plain.flush_steps_before_wait is False
+
+
+# ---------------------------------------------------------------------------
 # What stays as it was
 # ---------------------------------------------------------------------------
 
@@ -560,6 +620,7 @@ def test_a_bare_toolchange_object_has_no_n4s4_state():
     assert bare.shared_stepper is False
     assert bare.protect_every_change is False
     assert bare.restore_via_corridor is False
+    assert bare.flush_steps_before_wait is False
     assert bare.no_tower_prime_macro == ""
 
 

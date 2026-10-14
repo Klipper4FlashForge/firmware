@@ -241,6 +241,7 @@ class FFToolchange:
     no_tower_prime_macro = ''
     protect_every_change = False
     restore_via_corridor = False
+    flush_steps_before_wait = False
     shared_stepper = False
     print_base_z = 0.
     plate_z = 0.
@@ -401,6 +402,17 @@ class FFToolchange:
         # out (X), the way the dock moves themselves travel.
         self.restore_via_corridor = config.getboolean(
             'restore_via_corridor', False)
+        # N4S4: Klipper hands the MCU the last stretch of a move (the part that
+        # starts within about 50 ms of its end: the braking) only when a later
+        # flush comes, and while the queue is draining that flush is a timer
+        # that fires 0.2 s before the steps are due. A host stall of that
+        # length at that moment leaves the stepper without its last steps and
+        # the MCU shuts down with "Timer too close". The wait that every dock
+        # step ends with can ask for that flush at once, so that all of the
+        # motion is on the MCU before the host starts waiting. It costs no
+        # time: the wait is as long as it was.
+        self.flush_steps_before_wait = config.getboolean(
+            'flush_steps_before_wait', False)
 
         # Sensor names.
         #  position buttons: one per tool, PRESSED == that tool is docked.
@@ -756,7 +768,14 @@ class FFToolchange:
 
     def _wait_moves(self):
         # Equivalent of the app's M400 before sampling sensors.
-        self.printer.lookup_object('toolhead').wait_moves()
+        toolhead = self.printer.lookup_object('toolhead')
+        if self.flush_steps_before_wait:
+            # N4S4: send the steps of the last 50 ms of motion now, not from
+            # a timer 0.2 s before they are due (see the option).
+            flush = getattr(toolhead, 'flush_step_generation', None)
+            if flush is not None:
+                flush()
+        toolhead.wait_moves()
 
     def _sleep(self, seconds):
         self.reactor.pause(self.reactor.monotonic() + seconds)

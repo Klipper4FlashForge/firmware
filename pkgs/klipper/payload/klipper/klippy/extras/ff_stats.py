@@ -46,6 +46,18 @@ short return travel to the print position is not included.
 
 Nothing here may break a print: every entry point called from other modules
 is exception-safe on the caller's side, and a failed write only logs.
+
+WHY THE FILE IS WRITTEN FROM A THREAD
+
+/usr/data is mounted `sync` on the Creator 5, so every write, fsync and rename
+waits for the eMMC, and an eMMC can take a second now and then.  Klipper runs
+everything in one thread; a statistics write that stalls it for a second stalls
+the step generation with it, and a stepper whose next steps arrive that late
+makes the MCU shut down ("Timer too close").  So the periodic and the
+end-of-job saves only render the JSON in the Klipper thread (milliseconds) and
+hand the text to a writer thread; they are also held back while a tool change
+runs.  The saves at shutdown, disconnect and reset still write in the caller's
+thread: nothing is moving then, and the caller wants the file on disk.
 """
 
 import functools
@@ -53,6 +65,7 @@ import json
 import logging
 import math
 import os
+import threading
 import time
 
 STATS_VERSION = 1
@@ -84,6 +97,12 @@ DEFAULT_PHASE_COMMANDS = (
     'TOOLCHANGE_PARK=toolchange, FF_AFTER_PRINT_END=end')
 
 POLL_INTERVAL = 1.0
+# A save that a running tool change holds back goes out anyway once the last
+# save is this many save intervals old, so a change that never ends cannot
+# starve the file.
+SAVE_DEFER_LIMIT = 3
+# Longest wait for the writer thread when Klipper stops or the file is reset.
+WRITER_JOIN_TIMEOUT = 10.
 # A job that announced its end but was never finalised (END_PRINT killed by an
 # error, say) is closed after this long, so it cannot block the next one.
 ENDING_TIMEOUT = 900.
@@ -238,6 +257,14 @@ class FFStats:
         self._current_change = None
         self._dirty = False
         self._last_save = self.reactor.monotonic()
+        # The writer thread (started by the first save that does not wait):
+        # `_pending` is the newest text it has not written yet, `_writing`
+        # is set while it is inside the file calls, both under `_cond`.
+        self._cond = threading.Condition()
+        self._pending = None
+        self._writing = False
+        self._closing = False
+        self._writer = None
         self._timer = None
         self._wrapped = []
         self._print_stats_original = None
@@ -303,8 +330,15 @@ class FFStats:
         except OSError:
             logging.exception("ff_stats: cannot move %s aside", self.path)
 
-    def save(self, now=None):
-        """Write the statistics atomically.  Never raises."""
+    def save(self, now=None, wait=True):
+        """Write the statistics atomically.  Never raises.
+
+        With wait=True the file is on disk when this returns, and the result
+        says whether the write worked.  With wait=False the text is only
+        rendered here and the writer thread writes it, so a slow eMMC cannot
+        hold up Klipper (see the module docstring): the result then only says
+        the text was handed over, and a write that fails logs and marks the
+        data dirty again, so the next interval tries once more."""
         self._dirty = False
         self._last_save = self.reactor.monotonic() if now is None else now
         if not self.path:
@@ -313,12 +347,23 @@ class FFStats:
             self.data['saved'] = time.time()
             self.data['open_job'] = (self._job_record('open', self._last_save)
                                      if self.job is not None else None)
+            text = json.dumps(self.data, indent=1, sort_keys=True)
+        except Exception:
+            logging.exception("ff_stats: cannot render the statistics")
+            return False
+        if wait:
+            return self._write_now(text)
+        return self._hand_over(text)
+
+    def _write(self, text):
+        """The file calls, in the thread that runs them.  Never raises."""
+        try:
             directory = os.path.dirname(self.path)
             if directory:
                 os.makedirs(directory, exist_ok=True)
             tmp = self.path + '.tmp'
             with open(tmp, 'w') as handle:
-                json.dump(self.data, handle, indent=1, sort_keys=True)
+                handle.write(text)
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp, self.path)
@@ -326,6 +371,67 @@ class FFStats:
         except Exception:
             logging.exception("ff_stats: cannot write %s", self.path)
             return False
+
+    def _write_now(self, text):
+        # This text is newer than anything still waiting for the writer, and
+        # the writer must not be inside the file calls at the same time.
+        with self._cond:
+            self._pending = None
+            while self._writing:
+                self._cond.wait()
+        return self._write(text)
+
+    def _hand_over(self, text):
+        with self._cond:
+            if not self._closing:
+                self._pending = text        # newer text replaces unwritten
+                if self._writer is None:
+                    self._writer = threading.Thread(
+                        target=self._writer_loop, name='ff_stats-writer',
+                        daemon=True)
+                    self._writer.start()
+                self._cond.notify_all()
+                return True
+        return self._write(text)            # the writer is gone: write here
+
+    def _writer_loop(self):
+        while True:
+            with self._cond:
+                while self._pending is None and not self._closing:
+                    self._cond.wait()
+                text, self._pending = self._pending, None
+                if text is None:
+                    return                  # closing, nothing left to write
+                self._writing = True
+            written = False
+            try:
+                written = self._write(text)
+            finally:
+                if not written:
+                    self._dirty = True      # the next interval tries again
+                with self._cond:
+                    self._writing = False
+                    self._cond.notify_all()
+
+    def flush(self, timeout=WRITER_JOIN_TIMEOUT):
+        """Wait until the writer has written everything handed to it.
+        True when it is idle."""
+        deadline = time.monotonic() + timeout
+        with self._cond:
+            while self._pending is not None or self._writing:
+                left = deadline - time.monotonic()
+                if left <= 0.:
+                    return False
+                self._cond.wait(left)
+        return True
+
+    def _stop_writer(self):
+        with self._cond:
+            self._closing = True
+            self._cond.notify_all()
+            writer = self._writer
+        if writer is not None:
+            writer.join(WRITER_JOIN_TIMEOUT)
 
     def _recover_open_job(self):
         """A job still marked open on disk was cut short by a power loss or a
@@ -369,6 +475,7 @@ class FFStats:
     def _handle_disconnect(self):
         self._close_job('interrupted', 'klippy stopped')
         self.save()
+        self._stop_writer()
 
     def _extruder_names_from_toolchanger(self):
         toolchanger = self.printer.lookup_object('ff_toolchange', None)
@@ -641,7 +748,7 @@ class FFStats:
         record = self._job_record(status, now, message)
         self.job = None
         self._fold(record)
-        self.save(now)
+        self.save(now, wait=False)
         return record
 
     def _fold(self, record):
@@ -764,8 +871,16 @@ class FFStats:
         interval = (self.job_save_interval if self.job is not None
                     else self.save_interval)
         if ((self._dirty or self.job is not None)
-                and now - self._last_save >= interval):
-            self.save(now)
+                and now - self._last_save >= interval
+                and not self._defer_save(now, interval)):
+            self.save(now, wait=False)
+
+    def _defer_save(self, now, interval):
+        """A tool change is the most timing-sensitive stretch of a job, so no
+        save starts inside one -- unless the last save is so old that the
+        file would fall behind (a change that never ends)."""
+        return (self._current_change is not None
+                and now - self._last_save < SAVE_DEFER_LIMIT * interval)
 
     def _follow_print_state(self, job, state, now):
         if job['ending']:
@@ -1040,6 +1155,7 @@ class FFStats:
         Klipper would write its in-memory totals straight back, so deleting
         the file by hand does not reset anything."""
         kept = None
+        self.flush()        # an unwritten save would put the old totals back
         if self.path and os.path.exists(self.path):
             kept = '%s.reset-%d' % (self.path, int(time.time()))
             os.replace(self.path, kept)

@@ -189,6 +189,17 @@ def test_cooldown_pad_cycle_covers_every_safe_grid_point_once():
         assert max(13.8 + y for _x, y in points) <= 14.0
 
 
+def test_the_host_stall_guards_are_on_in_the_n4s4_config():
+    config_source = CONFIG.read_text(encoding="utf-8")
+    section = re.search(r"^\[ff_toolchange\]\n(.*?)(?=^\[)", config_source,
+                        re.S | re.M)
+    assert section, "no [ff_toolchange] section"
+
+    assert re.search(r"^flush_steps_before_wait: 1$", section.group(1),
+                     re.M)
+    assert re.search(r"^\[ff_lagwatch\]$", config_source, re.M)
+
+
 def test_the_no_tower_macro_the_toolchanger_calls_exists():
     """ff_toolchange checks at connect that every macro it will call exists
     and refuses to start otherwise; the name in printer_n4s4.cfg must be one."""
