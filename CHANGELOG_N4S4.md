@@ -1,6 +1,6 @@
 # Creator 5 N4S4 – Change Log
 
-Last updated: 2026-10-06
+Last updated: 2026-10-14
 
 This document describes what branch `n4s4/fixes-and-optimizations-02` adds to
 the **original project's current `main`** (Klipper4FlashForge/firmware at
@@ -170,6 +170,27 @@ distance per pickup:
   HelixScreen, the console).
 - Without the option (the default) the original's single move applies.
 
+### The wait sends the last steps first
+
+- On 2026-10-14 a print stopped at layer 37 with `MCU 'mcu' shutdown: Timer
+  too close` in the last millimetres of the approach to T3's dock. The log
+  showed one stall of Klipper's main thread of about a second (the clock-sync
+  ping every MCU gets once a second was 2.1 s apart, once) and a move whose
+  braking steps arrived 1.03 s after they were due. Klipper does not send the
+  steps that start within about 50 ms of a move's end until a later flush,
+  and while the queue drains that flush is a timer 0.2 s ahead of them; a
+  stall of the host at that moment leaves the stepper without its last steps.
+- With `flush_steps_before_wait: 1`, `_wait_moves` calls the toolhead's
+  `flush_step_generation()` before it waits, so all of the motion is on the
+  MCU before the host starts waiting. The wait is as long as it was; nothing
+  is added to a change. A toolhead without that call is waited on as before.
+- Without the option (the default) the wait is Klipper's own.
+- A time-costing alternative (a dwell before the dock moves for a larger
+  buffer) was considered and not built: the flush timer's 0.2 s is a constant
+  of Klipper's background flush and does not grow with the buffer, so it would
+  not have prevented this failure.
+- `docs/host-stalls.md`. Not yet run through a print on a printer.
+
 ### New `[ff_toolchange]` options
 
 - `purge_retract`
@@ -178,6 +199,7 @@ distance per pickup:
 - `no_tower_prime_macro`
 - `protect_every_change`
 - `restore_via_corridor`
+- `flush_steps_before_wait`
 
 The original's `restore_z_hop`, `restore_z_feed`, `restore_retract`,
 `restore_retract_feed`, `restore_unretract` and `restore_unretract_feed` are
@@ -293,6 +315,32 @@ New file. User documentation: `docs/statistics.md`.
   hence no write per event. An unreadable file is renamed to
   `.corrupt-<time>` rather than overwritten; a file from an older layout is
   filled in with the counters it lacks.
+- The periodic and end-of-job saves are written by a second thread: Klipper's
+  thread only renders the JSON (a few milliseconds) and hands it over, so a
+  slow flash cannot hold up the step generation. A newer text replaces one
+  that is still waiting. No periodic save starts while a tool change runs,
+  unless the last save is three intervals old. Shutdown, disconnect and
+  `FF_STATS_RESET` still write in the calling thread. Before this change every
+  save was an `fsync` in Klipper's thread, one of the suspects for the stall
+  of 2026-10-14.
+
+## `/usr/data/anvil/klipper/klippy/extras/ff_lagwatch.py`
+
+New file. User documentation: `docs/host-stalls.md`.
+
+- A reactor timer beats every `period` (0.1 s) and a watchdog thread watches
+  it. When the beat is `threshold` (0.25 s) late, the watchdog logs the
+  Python stack of Klipper's main thread (taken while it is blocked: the call
+  that blocks shows up, an `fsync` or a sleep) up to four times per stall.
+  When the beat returns it logs how long the thread was away, whether a tool
+  change was running and how much motion was queued.
+- Garbage collections slower than `gc_threshold` (0.05 s) are logged by the
+  next beat (a collection holds the interpreter, so it cannot be sampled).
+- Lines start with `ff_lagwatch:` in `printer.log`; `max_reports` (50) limits
+  them per Klipper run, the counters keep counting. `FF_LAGWATCH` lists the
+  recent stalls; the status object has `stalls`, `worst_s` and `threshold_s`.
+- It never moves the machine, and an exception inside its timer is logged and
+  dropped, because a reactor timer that raises shuts the printer down.
 - Console: `FF_STATS_SHOW WHAT=SUMMARY|JOB|JOBS [COUNT=]`, shown in Mainsail
   through the macros `FF_STATS`, `FF_STATS_JOB` and `FF_STATS_JOBS`;
   `FF_STATS_PHASE NAME= [END=1]` for custom macros; `FF_STATS_RESET CONFIRM=1`
@@ -353,13 +401,14 @@ restore_unretract_feed: 200
 no_tower_prime_macro: _NS_MARK_TOOL_PRIME
 protect_every_change: 1
 restore_via_corridor: 1
+flush_steps_before_wait: 1
 ```
 
 `grab_retreat_feed` and the `restore_*` options exist in the original (it
 ships `restore_axis` unset, and everything else off); these are the values
 `printer_n4s4.cfg` gives them. `purge_retract`, `purge_retract_dwell_ms`,
-`tower_repeat_retract`, `no_tower_prime_macro`, `protect_every_change` and
-`restore_via_corridor` are N4S4's own options.
+`tower_repeat_retract`, `no_tower_prime_macro`, `protect_every_change`,
+`restore_via_corridor` and `flush_steps_before_wait` are N4S4's own options.
 
 - `DEFINE_PRIME_TOWER_OBJECT` also registers the tower bounds with the native
   toolchanger. XY restoration remains enabled when Orca emits `T<n>` while
@@ -426,6 +475,10 @@ ships `restore_axis` unset, and everything else off); these are the values
 - `[ff_stats]` loads the statistics extra with its defaults.
 - `FF_STATS`, `FF_STATS_JOB` and `FF_STATS_JOBS` (`COUNT=`) are macros, so
   they are buttons in Mainsail and print to its console.
+
+### Lag watch
+
+- `[ff_lagwatch]` loads the lag watch with its defaults.
 
 ### Other pre-existing local changes
 

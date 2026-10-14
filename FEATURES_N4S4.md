@@ -32,11 +32,11 @@ it adds on top of it and tries not to rewrite any of it.
 |---|---|
 | Base | the original project's `main`, `df57d27` (2026-10-03) |
 | Size | 36 files changed against `main`, +9,080 / −37 lines: about 3,380 of code and configuration, 3,070 of tests, 2,630 of documents |
-| New Klipper extras | `ff_extruder` (the original removed it, see section 2), `ff_stats` |
+| New Klipper extras | `ff_extruder` (the original removed it, see section 2), `ff_stats`, `ff_lagwatch` |
 | Extended Klipper extras | `ff_toolchange` (+431 / −22), `ff_print` (+80 / −7) |
 | New configuration | `printer_n4s4.cfg` (about 960 lines): new macros, redefined macros, one startup `delayed_gcode` |
 | Buttons added to Mainsail | `TOOLCHANGE_STATUS`, `START_PURGE_SET`, `START_PURGE_STATUS`, `TIMELAPSE_TOGGLE`, `FF_STATS`, `FF_STATS_JOB`, `FF_STATS_JOBS` (`ADAPTIVE_MESH_TOGGLE` and `ADAPTIVE_MESH_STATUS` are the original's now) |
-| Tests | 586 static tests in the build image (2 more are skipped), of which the original's own run unmodified; the replica lane on a Creator 5 replica is run for a release |
+| Tests | 632 static tests in the build image (2 more are skipped), of which the original's own run unmodified; the replica lane on a Creator 5 replica is run for a release |
 | Tested on | one Creator 5 (not the Pro), OrcaSlicer 2.4.x |
 
 ### Ground rules it follows
@@ -88,13 +88,15 @@ N4S4 sets them and adds the decisions below.
 | **The return past the docks** | After a change the carriage returns to where it was, in one straight move. To the purge chute that move cuts across the docked tools with the new tool on the carriage (`LOAD_FILAMENT` on T1 drove into T2, 2026-10-06). With `restore_via_corridor: 1` a return to a point beyond `x_safe` goes along the safe column first, then out. A return onto the bed is still one move. |
 | **Shared stepper kept in step** | With `[ff_extruder]`, after every pickup (and when the mounted tool is selected again) `SYNC_EXTRUDER_MOTION` connects the one physical stepper to the picked tool, before the in-dock retract (see section 2). |
 | **A change without a prime tower** | With `no_tower_prime_macro`, no return to the model; the tool waits raised at `X250` for Orca's `M109` and gets one 5 mm chute prime on its first use (section 6). |
+| **No "Timer too close" from a host stall at a dock** | Klipper sends the braking steps of a move late (from a timer 0.2 s before they are due), so a stall of its main thread of about a second at the end of a dock move shuts the MCU down; this ended a print at T3's dock on 2026-10-14. With `flush_steps_before_wait: 1` every wait of a change first sends all steps of the motion. No time is lost. See section 7a. |
 | **Visible status** | `FF_TOOLCHANGE_STATUS` always exists; `TOOLCHANGE_STATUS` keeps its name unless a macro of that name is configured (in any case), which is how it becomes a Mainsail button. It also reports the print Z components, the registered tower and the tools selected this job. |
 
 New commands in `ff_toolchange`: `TOOLCHANGE_PREPARE_PICKUP`,
 `TOOLCHANGE_BEGIN_JOB`, `TOOLCHANGE_SET_PRIME_TOWER`,
 `TOOLCHANGE_SET_MATERIAL_OFFSET`, `FF_TOOLCHANGE_STATUS`. New options:
 `purge_retract`, `purge_retract_dwell_ms`, `tower_repeat_retract`,
-`no_tower_prime_macro`, `protect_every_change`, `restore_via_corridor`. The millimetre values above
+`no_tower_prime_macro`, `protect_every_change`, `restore_via_corridor`,
+`flush_steps_before_wait`. The millimetre values above
 are what `printer_n4s4.cfg` sets; the defaults in the code are zero, or the
 same as `restore_retract`.
 
@@ -278,12 +280,37 @@ New in this branch; documented in [`docs/statistics.md`](docs/statistics.md).
 - **Careful with the flash:** one JSON file under `/usr/data/anvil-data`
   (kept across firmware updates), written atomically, rarely (every 5 minutes
   idle, every minute during a job, and at job end and shutdown), because
-  `/usr/data` is mounted `sync`. A job left open by a power loss is recovered
-  as `interrupted`. An unreadable file is moved aside, not overwritten.
+  `/usr/data` is mounted `sync`, and from a second thread, never during a
+  tool change, so that a slow flash cannot hold up Klipper. A job left open by
+  a power loss is recovered as `interrupted`. An unreadable file is moved
+  aside, not overwritten.
 - **Contained.** In Klipper an exception inside a G-code handler is a printer
   shutdown, so everything Klipper can call into `ff_stats` is guarded.
 - **Not included yet:** per-nozzle hours at temperature and heat cycles, and
   maintenance counters (axis travel, motor, bed and fan hours, with reminders).
+
+---
+
+## 7a. Host stalls (`ff_lagwatch`)
+
+On 2026-10-14 a three-colour print ended with `Timer too close` at T3's dock
+although the host was not overloaded: Klipper's main thread had stopped for
+about a second. The firmware now does three things about it (page
+`docs/host-stalls.md`):
+
+- **The wait sends the last steps first** (`flush_steps_before_wait`, section
+  2): after it, the MCU holds all of a move and a stall of the host cannot
+  starve it. No time is lost.
+- **The statistics are written by a second thread** (section 7), the main
+  suspect of the stall, because it did an `fsync` on a `sync`-mounted flash
+  from Klipper's thread once a minute.
+- **A lag watch** (`[ff_lagwatch]`) notes in `printer.log` when the main
+  thread is away for 0.25 s or more, with the call it was blocked in, how long
+  it lasted and whether motion was queued. `FF_LAGWATCH` lists them. It
+  changes nothing about a print; it is how the real cause is found.
+
+Not yet run through a print on a printer; the cause of the stall itself is not
+known.
 
 ---
 
@@ -381,9 +408,12 @@ N4S4 tests at their end.
     tool and its first target (found in the head of the file, not beyond it),
     and that the start macro is not handed `TOOLS=`.
   - `test_ff_extruder` — the shared-stepper adapter.
-  - `test_ff_stats` (49 functions) — jobs, phases, measured filament, the
-    `print_stats` correction, persistence and recovery, reports, and the real
-    `FFToolchange._toolchange`.
+  - `test_ff_stats` — jobs, phases, measured filament, the
+    `print_stats` correction, persistence and recovery, the writer thread,
+    reports, and the real `FFToolchange._toolchange`.
+  - `test_ff_lagwatch` — the beat, the watchdog's stack samples (against a
+    thread blocked in a call), garbage-collection lines, that nothing in it
+    can raise into Klipper.
   - `test_ff_toolchange` — what `printer_n4s4.cfg` wires up (retract values,
     lip wipe, cooldown grid).
   - `test_n4s4_include_installer`, `test_timelapse_config`, and additions to
@@ -494,6 +524,14 @@ Each has its evidence level.
 - **Tool-change times** exclude the short return travel to the print
   position, and phase times can be a couple of seconds early because Klipper
   processes G-code ahead of the motion.
+- **Host stalls (2026-10-14):** the `Timer too close` of that day was traced
+  from the log to one stall of Klipper's main thread of about a second, and
+  the mechanism (the braking steps of a move leave the host from a timer
+  0.2 s before they are due) was read out of the toolhead's code. The fix
+  (`flush_steps_before_wait`) and the lag watch are covered by unit tests and
+  by a run of the lag watch with real threads and a real clock; **they have
+  not run through a print on a printer**, and the cause of that stall is not
+  known. The statistics writer thread is the first thing changed against it.
 
 ## Which parts could be proposed upstream
 
@@ -520,6 +558,7 @@ depend on one machine and are better left as local configuration.
 | Path in the repository | What |
 |---|---|
 | `pkgs/klipper/payload/klipper/klippy/extras/ff_stats.py` | statistics |
+| `.../ff_lagwatch.py` | lag watch |
 | `.../ff_extruder.py` | shared stepper |
 | `.../ff_toolchange.py`, `.../ff_print.py` | the original's modules, extended |
 | `pkgs/klipper-config/payload/config/printer_n4s4.cfg` | the N4S4 configuration |

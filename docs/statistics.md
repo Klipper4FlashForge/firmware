@@ -197,7 +197,11 @@ firmware keeps the statistics.
 The file is written when a job ends, at shutdown, and otherwise when there is
 something new, at most every 5 minutes (every minute while a job runs). It is
 replaced atomically. `/usr/data` is mounted `sync`, so a write is a real
-write to flash; that is why the counters are not written on every event.
+write to flash; that is why the counters are not written on every event, and
+why the periodic and end-of-job writes are done by a second thread: a write
+that takes a second must not hold up Klipper (see
+[When Klipper's host stalls](host-stalls.md)). No write starts while a tool
+change runs.
 
 After a power loss, a job that was open is recovered from the last save, at
 most a minute old, and recorded as `interrupted`.

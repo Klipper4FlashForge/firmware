@@ -35,7 +35,9 @@ again (`7e8ea9d`, `df57d27`), and two are fixes by another contributor
 | Shared extruder stepper (`ff_extruder`) | taken, then **removed** (no failure had been shown) | **kept**: section 5 |
 | Preheat of the second tool | taken, then **removed** | **kept** (a decision of 2026-10-07): section 3 |
 | List of the tools a file uses | offered in #29, **not taken** | kept: section 3 |
-| Statistics (`ff_stats`) | offered in #29, **not taken** | kept |
+| Statistics (`ff_stats`) | offered in #29, **not taken** | kept; its saves are written from a thread since 2026-10-14 |
+| Lag watch (`ff_lagwatch`) | new (2026-10-14) | kept; finds what stops Klipper's main thread, changes nothing |
+| `flush_steps_before_wait` | new (2026-10-14) | kept, off unless set; a candidate to offer |
 | Purge and cleaning work, Mainsail switches, timelapse, installer, `printer_n4s4.cfg` | not in #29 | kept |
 
 ---
@@ -86,6 +88,7 @@ code are zero, or the same as `restore_retract`.
 | Plate and material Z | `TOOLCHANGE_SET_PRINT_OFFSET PLATE=`, `TOOLCHANGE_SET_MATERIAL_OFFSET` | The print offset is three independent parts (the app's temperature / bed / layer term, a build-plate term, the filament's term); none accumulates and none touches the babystep or the tool calibration |
 | Status | always | `FF_TOOLCHANGE_STATUS` always exists; `TOOLCHANGE_STATUS` is registered as before unless a `[gcode_macro TOOLCHANGE_STATUS]` is configured, in any case (N4S4 has one, a Mainsail button that calls `FF_TOOLCHANGE_STATUS`). The report lists the Z parts, the registered tower and the tools used this job |
 | Statistics hooks | `[ff_stats]` in the configuration | Counts, times and failures of tool changes |
+| The wait sends the last steps first | `flush_steps_before_wait: 1` | Klipper sends the braking steps of a move from a timer 0.2 s before they are due, so a stall of its main thread of about a second at the end of a dock move shut the MCU down (`Timer too close`, T3's dock, 2026-10-14). The option makes every wait of a change call `flush_step_generation()` first. No time is lost. General for any four-tool Creator 5; off unless set |
 
 ### The six macros redefined in `printer_n4s4.cfg`
 
