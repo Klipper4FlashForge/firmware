@@ -200,7 +200,9 @@ del output[:]
 gc._process_commands(["FF_STATS_SHOW WHAT=nonsense"])
 check("bad WHAT rejected", any("WHAT must be" in line for line in output), output)
 
-# the file it wrote reads back
+# the file it wrote reads back (the end-of-job save is written by the writer
+# thread: wait for it, as a restart would)
+check("writer flushed", stats.flush())
 saved = json.load(open(path))
 check("saved", saved["lifetime"]["jobs"]["completed"] == 1 and saved["version"] == 1)
 json.dumps(stats.get_status(0))
