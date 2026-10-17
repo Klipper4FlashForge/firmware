@@ -127,6 +127,22 @@ setup to `ADAPTIVE_MESH`; this avoids homing and grabbing the same tool twice.
 
 ### Nozzle-dependent startup purge line
 
+Set the installed nozzle diameter both in Orca's printer profile and in
+Klipper. The printer-side Mainsail macros are:
+
+```gcode
+NOZZLE_SIZE_STATUS
+NOZZLE_SIZE_SET TOOL=3 DIAMETER=0.25
+NOZZLE_SIZE_APPLY
+```
+
+`SET` only stages the value; `APPLY` saves all staged tools with Klipper's
+native `SAVE_CONFIG` and restarts Klipper, including recalculation of its
+extrusion limits. Do this outside a print and after motion stops. The two
+configurations are not synchronised automatically: update Orca and re-slice
+after changing a nozzle. See [Nozzle diameters from Mainsail](docs/nozzle-sizes.md)
+for installation, cancellation, and configuration-conflict handling.
+
 The start G-code selects the purge parameters from the nozzle diameter of the
 initial tool:
 

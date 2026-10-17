@@ -37,6 +37,7 @@ again (`7e8ea9d`, `df57d27`), and two are fixes by another contributor
 | List of the tools a file uses | offered in #29, **not taken** | kept: section 3 |
 | Statistics (`ff_stats`) | offered in #29, **not taken** | kept; its saves are written from a thread since 2026-10-14 |
 | Lag watch (`ff_lagwatch`) | new (2026-10-14) | kept; finds what stops Klipper's main thread, changes nothing |
+| Nozzle diameter macros (`ff_nozzle_size`) | new (2026-10-17) | opt-in; stage per-tool sizes in Mainsail and save/restart through native `SAVE_CONFIG`; see `docs/nozzle-sizes.md` |
 | `flush_steps_before_wait` | new (2026-10-14) | kept, off unless set; a candidate to offer |
 | Purge and cleaning work, Mainsail switches, timelapse, installer, `printer_n4s4.cfg` | not in #29 | kept |
 

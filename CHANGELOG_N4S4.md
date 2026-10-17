@@ -1,6 +1,6 @@
 # Creator 5 N4S4 – Change Log
 
-Last updated: 2026-10-14
+Last updated: 2026-10-17
 
 This document describes what branch `n4s4/fixes-and-optimizations-02` adds to
 the **original project's current `main`** (Klipper4FlashForge/firmware at
@@ -14,6 +14,27 @@ The older, longer description of everything against the original base
 `96c0565` is the same file on branch `n4s4/fixes-and-optimizations-01`.
 
 All printer paths are relative to `/usr/data`.
+
+## `/usr/data/anvil/klipper/klippy/extras/ff_nozzle_size.py`
+
+- Adds optional per-tool nozzle-diameter configuration through the Mainsail
+  macros `NOZZLE_SIZE_STATUS`, `NOZZLE_SIZE_SET TOOL=0..3 DIAMETER=...`, and
+  `NOZZLE_SIZE_APPLY`, enabled by `[ff_nozzle_size]` in `printer_n4s4.cfg`.
+- `SET` keeps changes in RAM without changing live extruders or the native
+  autosave buffer. `STATUS` distinguishes active and staged sizes. Multiple
+  tools can be staged before a single `APPLY`.
+- `APPLY` uses native `SAVE_CONFIG` for backups, storage in the managed block
+  of `printer.cfg`, and a Klipper restart. Extrusion limits and config-reading
+  macros then use the same diameter; no extra `FIRMWARE_RESTART` is needed.
+- Changes are refused during a print, pause, or motion. Tool and diameter
+  inputs are validated, and unrelated pending calibration prevents `APPLY`
+  from silently saving it. A failed native save restores the previous
+  in-memory autosave state while retaining the staged nozzle edits.
+- Plain `RESTART` discards unapplied edits. An unchanged diameter does not
+  cause a write or restart. Included-file conflicts retain native Klipper
+  error handling; `nozzle_diameter` must not be overridden in an include.
+- Adds `docs/nozzle-sizes.md` and updates the Orca guide: the nozzle diameter
+  must also be configured separately in Orca, followed by re-slicing.
 
 ## `/usr/data/anvil/klipper/klippy/extras/ff_extruder.py`
 

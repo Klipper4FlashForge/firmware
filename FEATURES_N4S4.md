@@ -32,12 +32,19 @@ it adds on top of it and tries not to rewrite any of it.
 |---|---|
 | Base | the original project's `main`, `df57d27` (2026-10-03) |
 | Size | 36 files changed against `main`, +9,080 / −37 lines: about 3,380 of code and configuration, 3,070 of tests, 2,630 of documents |
-| New Klipper extras | `ff_extruder` (the original removed it, see section 2), `ff_stats`, `ff_lagwatch` |
+| New Klipper extras | `ff_extruder` (the original removed it, see section 2), `ff_stats`, `ff_lagwatch`, `ff_nozzle_size` |
 | Extended Klipper extras | `ff_toolchange` (+431 / −22), `ff_print` (+80 / −7) |
 | New configuration | `printer_n4s4.cfg` (about 960 lines): new macros, redefined macros, one startup `delayed_gcode` |
-| Buttons added to Mainsail | `TOOLCHANGE_STATUS`, `START_PURGE_SET`, `START_PURGE_STATUS`, `TIMELAPSE_TOGGLE`, `FF_STATS`, `FF_STATS_JOB`, `FF_STATS_JOBS` (`ADAPTIVE_MESH_TOGGLE` and `ADAPTIVE_MESH_STATUS` are the original's now) |
+| Buttons added to Mainsail | `TOOLCHANGE_STATUS`, `START_PURGE_SET`, `START_PURGE_STATUS`, `TIMELAPSE_TOGGLE`, `FF_STATS`, `FF_STATS_JOB`, `FF_STATS_JOBS`, `NOZZLE_SIZE_STATUS`, `NOZZLE_SIZE_SET`, `NOZZLE_SIZE_APPLY` (`ADAPTIVE_MESH_TOGGLE` and `ADAPTIVE_MESH_STATUS` are the original's now) |
 | Tests | 670 static tests in the build image (2 more are skipped), of which the original's own run unmodified; the replica lane on a Creator 5 replica is run for a release |
 | Tested on | one Creator 5 (not the Pro), OrcaSlicer 2.4.x |
+
+**Nozzle sizes without manual config edits.** Stage the installed diameter
+per tool with `NOZZLE_SIZE_SET TOOL=0..3 DIAMETER=...`, inspect it with
+`NOZZLE_SIZE_STATUS`, then save and restart once with `NOZZLE_SIZE_APPLY`.
+The optional helper uses native `SAVE_CONFIG`, checks that the printer is
+idle, and leaves Orca's separate nozzle setting to the user. See
+[Nozzle diameters from Mainsail](docs/nozzle-sizes.md).
 
 ### Ground rules it follows
 

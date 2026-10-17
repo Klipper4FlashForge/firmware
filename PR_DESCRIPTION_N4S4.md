@@ -77,6 +77,23 @@ text, and a test pins what that text looks like.
 
 ## Main changes
 
+### Nozzle diameter configuration from Mainsail
+
+Changing a nozzle previously required manually editing Klipper's config in
+addition to updating the slicer. The optional `ff_nozzle_size` extra and three
+Mainsail macros now expose active sizes, stage replacements per tool, and
+save them together using native `SAVE_CONFIG`. Its backup and restart path
+recalculates the extruders' size-dependent limits. For example,
+`NOZZLE_SIZE_SET TOOL=3 DIAMETER=0.25` followed by `NOZZLE_SIZE_APPLY` persists
+T3's size; staging alone changes neither the live extruder nor autosave data.
+
+Changes are refused during prints, pauses, motion, or (for apply) unrelated
+pending calibration. A native save failure restores the autosave buffer.
+This adds no shell dependency and leaves generic `extruder.py` unchanged.
+Orca's nozzle setting remains separate. Installation and usage are in
+`docs/nozzle-sizes.md`; regression tests cover staging, validation, save
+rollback, restart state, macro forwarding, and busy-printer rejection.
+
 ### The incident, and what was done about it (2026-10-14)
 
 A three-colour job stopped at layer 37 with `MCU 'mcu' shutdown: Timer too
@@ -260,7 +277,7 @@ See the table in `UPSTREAM_STATUS_N4S4.md` (what and why) and
 `CHANGELOG_N4S4.md` (per file). In short:
 
 - `pkgs/klipper/payload/klipper/klippy/extras/`: `ff_stats.py`,
-  `ff_extruder.py` and `ff_lagwatch.py` (new), `ff_toolchange.py` and
+  `ff_extruder.py`, `ff_lagwatch.py`, and `ff_nozzle_size.py` (new), `ff_toolchange.py` and
   `ff_print.py` (extended).
 - `pkgs/klipper-config/payload/config/printer_n4s4.cfg` and
   `pkgs/klipper-config/payload/scripts/10-enable-printer-n4s4.sh` (new);
@@ -271,10 +288,12 @@ See the table in `UPSTREAM_STATUS_N4S4.md` (what and why) and
 - `qa/static/`: `test_toolchange_n4s4.py`, `test_n4s4_overrides.py`,
   `test_ff_print_tools.py`, `test_ff_extruder.py`, `test_ff_stats.py`,
   `test_ff_toolchange.py`, `test_ff_lagwatch.py`, `test_ff_print_bounds.py`,
-  `test_n4s4_include_installer.py`, `test_timelapse_config.py`,
+  `test_n4s4_include_installer.py`, `test_timelapse_config.py`, `test_ff_nozzle_size.py`,
   `test_klipper_config.py` (additions);
-  `qa/replica/`: `test_ff_stats_on_real_klipper.py`, `test_custom_scripts.py` (additions).
-- Documents: `docs/statistics.md`, `docs/host-stalls.md`,
+  `qa/replica/`: `test_ff_stats_on_real_klipper.py`, `test_custom_scripts.py`,
+  `test_ff_nozzle_size_on_real_klipper.py`, and `actions/check_nozzle_size.py`
+  (native save/backup/reload and include-conflict checks).
+- Documents: `docs/statistics.md`, `docs/host-stalls.md`, `docs/nozzle-sizes.md`,
   `docs/how-a-print-runs.md` (a section), `docs/ssh-keys.md`, `UPSTREAM_STATUS_N4S4.md`,
   `FEATURES_N4S4.md`, `CHANGELOG_N4S4.md`, `ORCA_MACHINE_AND_FILAMENT_SETTINGS.md`,
   this file; `gcode/n4s4-extruder-direction-test.gcode`.
@@ -296,8 +315,16 @@ repeated boots exit immediately without adding script output to the log.
 
 ## Validation
 
-- The static suite in the build image: 670 passed and 2 skipped at the branch
-  head, among them every test function of the original, unmodified; it also
+- Nozzle configuration (2026-10-17): all 30 focused tests pass. A complete
+  static regression run passed 697 tests with 2 skips; the three additional
+  missing-parameter cases were then added and passed in the focused run.
+  A hardware-free smoke check with the real `gcode.py` and `configfile.py`
+  from the printer copy verified native backup, save, reload, include-conflict
+  rollback, and pending-calibration protection. The check is also wired into
+  the replica lane for the next firmware build; that full installed-image
+  lane and a physical-printer nozzle change have not been rerun for this addition.
+- The static suite in the build image on 2026-10-14: 670 passed and 2 skipped,
+  among them every test function of the original, unmodified; it also
   passed at each of the first nine commits (the later six were not built one by
   one).
 - `mkdocs build --strict` passes.
