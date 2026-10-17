@@ -7,10 +7,13 @@ pytestmark = pytest.mark.replica
 
 SOURCE = (ROOT / "pkgs" / "anvil-core" / "payload" / "bin" /
           "run-scripts.sh")
+N4S4_SOURCE = (ROOT / "pkgs" / "klipper-config" / "payload" / "scripts" /
+               "10-enable-printer-n4s4.sh")
 RUNNER = "/tmp/anvil-run-scripts.sh"
 SCRIPTS = "/tmp/anvil-custom-scripts"
 LOG = "/tmp/anvil-custom-scripts.log"
 SERVICE = "/usr/data/anvil/etc/s6-rc/source/run-scripts"
+N4S4_INSTALLED = "/usr/data/anvil-data/scripts/10-enable-printer-n4s4.sh"
 
 
 @pytest.fixture(scope="module")
@@ -62,3 +65,38 @@ def test_boot_service_runs_the_hook_with_a_bounded_transition(scripts):
     assert scripts.file(
         "/usr/data/anvil/etc/s6-rc/source/ok-all/contents.d/run-scripts"
     ).exists
+
+
+def test_n4s4_installer_is_put_in_the_persistent_boot_directory(scripts):
+    installed = scripts.file(N4S4_INSTALLED)
+    assert installed.exists
+    assert installed.text == N4S4_SOURCE.read_text()
+
+
+def test_n4s4_installer_runs_with_the_printers_busybox_and_then_stays_silent(scripts):
+    box = scripts
+    root = "/tmp/n4s4-include-installer"
+    printer = root + "/printer.cfg"
+    installer = root + "/10-enable-printer-n4s4.sh"
+    box.sh("rm -rf %s && mkdir -p %s" % (root, root))
+    box.write(
+        printer,
+        "[include mainsail.cfg]\n\n"
+        "# Save Mesh Data #\n"
+        "#*# <---------------------- SAVE_CONFIG ---------------------->\n",
+    )
+    box.write(root + "/printer_n4s4.cfg", "[gcode_macro N4S4_TEST]\n")
+    box.write(installer, N4S4_SOURCE.read_text())
+
+    first = box.sh("sh %s %s" % (installer, printer))
+    assert first.ok, first.text
+    generated = box.file(printer).text
+    assert generated.count("[include printer_n4s4.cfg]") == 1
+    assert generated.index("[include printer_n4s4.cfg]") < generated.index(
+        "# Save Mesh Data #"
+    )
+    assert box.file(printer + ".before-n4s4").exists
+
+    second = box.sh("sh %s %s" % (installer, printer))
+    assert second.ok, second.text
+    assert second.text == ""

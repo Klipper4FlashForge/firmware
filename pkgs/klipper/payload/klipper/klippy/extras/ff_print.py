@@ -27,6 +27,12 @@
 #   nozzle       the first `M104`/`M109 S<t>`
 #   first tool   the first bare `Tn` -- the file's initial extruder, NOT the
 #                lowest-numbered one it uses
+#   next tool    the second distinct bare `Tn`, plus its first `M109` target,
+#                within the head of the file; this covers a preheat window
+#                which begins inside start G-code
+#   tools        all tools named by Orca's `; filament:` header (1-based in
+#                that header), with a bare-Tn scan as fallback that gives up
+#                after SCAN_BUDGET seconds
 #   layer        the first `;HEIGHT:` -- the FIRST layer's height, which is
 #                what the print Z offset's thin-layer term wants
 #   prime tower  Orca's single resolved wipe_tower_x/y plus width/brim/rotation
@@ -42,11 +48,17 @@
 #
 # Per-tool clean temperatures are NOT taken from the file; the app's material
 # table is ported as _FF_FILAMENT.temps, with the material per tool alongside.
+#
+# N4S4: reading the file runs in a thread while the reactor goes on (see
+# _run_off_thread), and with check_bounds the print is refused up front when
+# the file moves beyond what the machine reaches (see _scan_extents).
 
 import logging
 import math
 import os
 import re
+import threading
+import time
 
 EXTRUDER_COUNT = 4
 
@@ -54,6 +66,32 @@ EXTRUDER_COUNT = 4
 # files, so this is a wide margin rather than a guess.
 HEAD_BYTES = 256 * 1024
 TAIL_BYTES = 256 * 1024
+
+# The two line-by-line scans below used to run on the thread that also keeps
+# the heaters alive, over a file that can be tens of megabytes; a stall of a
+# few seconds with a heater on makes the MCU shut down. The search for the
+# second tool therefore looks at the head of the file only, as the original's
+# first version of it did: a second colour further in is not needed from the
+# start (Orca's own preheat lands in the object body), and heating it that
+# early would only leave a hot nozzle idle. The fallback scan for the tools of
+# a file without Orca's header gives up after SCAN_BUDGET seconds. (N4S4: all
+# of it now runs in a thread, see _run_off_thread; the bounds are kept, they
+# keep the start from taking long.)
+NEXT_TOOL_SCAN_BYTES = HEAD_BYTES
+SCAN_BUDGET = 2.0
+
+# N4S4: how _cmd_start waits for the thread that reads the file. The reactor
+# runs timers (clock sync, heaters) every SCAN_POLL seconds meanwhile.
+SCAN_POLL = 0.05
+
+# N4S4: the extents scan reads the whole file in pieces of this size and lets
+# go of the interpreter between pieces, so that no other thread waits longer
+# than a piece takes (about 30 ms of regex per 16 KiB on the Creator 5's CPU,
+# 2.2 s for a 3 MB file). A file that takes longer than the budget is not
+# checked at all, rather than refused on a guess.
+EXTENTS_CHUNK = 16 * 1024
+EXTENTS_YIELD = 0.001
+EXTENTS_BUDGET = 40.0
 
 # print_stats states that mean the job is over (as opposed to paused mid-print).
 FINISHED_STATES = ('complete', 'cancelled', 'error')
@@ -93,6 +131,87 @@ def _parse_metadata(path):
                            head, re.M)
     if tool_match is not None:
         metadata['tool'] = int(tool_match.group(1))
+
+    # Orca lists every used filament/tool in its compact header.  Values are
+    # one-based there (`; filament: 1,3` means T0 and T2).  This lets the
+    # print-start macro offer an "all used colours" purge without loading the
+    # complete G-code into memory.  Older/non-Orca files fall back to a
+    # streaming scan of bare Tn commands, which stops after SCAN_BUDGET.
+    tools = []
+    filament_match = re.search(r'^;\s*filament:\s*([0-9, ]+)\s*$',
+                               head, re.M | re.I)
+    if filament_match is not None:
+        for value in filament_match.group(1).split(','):
+            try:
+                tool = int(value.strip()) - 1
+            except ValueError:
+                continue
+            if 0 <= tool < EXTRUDER_COUNT and tool not in tools:
+                tools.append(tool)
+    if not tools:
+        try:
+            deadline = time.monotonic() + SCAN_BUDGET
+            with open(path, 'rb') as fh:
+                for count, line in enumerate(fh):
+                    if count % 2000 == 0 and time.monotonic() > deadline:
+                        logging.warning(
+                            "ff_print: gave up scanning '%s' for its tools"
+                            " after %.1f s; the list may be incomplete",
+                            path, SCAN_BUDGET)
+                        break
+                    match = re.match(br'^T([0-%d])\b'
+                                     % (EXTRUDER_COUNT - 1), line)
+                    if match is not None:
+                        tool = int(match.group(1))
+                        if tool not in tools:
+                            tools.append(tool)
+        except Exception:
+            logging.exception("ff_print: cannot scan tools in '%s'", path)
+    if metadata.get('tool') is not None and metadata['tool'] not in tools:
+        tools.insert(0, metadata['tool'])
+    if tools:
+        metadata['tools'] = tools
+
+    # Orca normally inserts an M104 `preheat_time` seconds before a tool is
+    # needed. If the first colour is shorter than that window, the requested
+    # start lies inside custom machine-start G-code and no early M104 can be
+    # placed in the object body. Find the second distinct tool and the M109
+    # which establishes its actual first-use target; ADAPTIVE_MESH can start
+    # that one heater after probing, just before first-layer printing begins.
+    initial_tool = metadata.get('tool')
+    if initial_tool is not None:
+        active_tool = None
+        next_tool = None
+        scanned = 0
+        try:
+            with open(path, 'rb') as fh:
+                for raw_line in fh:
+                    scanned += len(raw_line)
+                    if scanned > NEXT_TOOL_SCAN_BYTES:
+                        break
+                    line = raw_line.decode('utf-8', 'replace')
+                    select = re.match(r'^T([0-%d])\b'
+                                      % (EXTRUDER_COUNT - 1), line)
+                    if select is not None:
+                        active_tool = int(select.group(1))
+                        if active_tool != initial_tool and next_tool is None:
+                            next_tool = active_tool
+                            metadata['next_tool'] = next_tool
+                    if next_tool is None or re.match(r'^M109\b', line) is None:
+                        continue
+                    explicit = re.search(r'\bT([0-%d])\b'
+                                         % (EXTRUDER_COUNT - 1), line)
+                    target_tool = (int(explicit.group(1))
+                                   if explicit is not None else active_tool)
+                    target = re.search(r'\bS([0-9]+(?:\.[0-9]+)?)', line)
+                    if target_tool == next_tool and target is not None:
+                        temperature = float(target.group(1))
+                        if temperature > 0.:
+                            metadata['next_nozzle'] = int(temperature)
+                            break
+        except Exception:
+            logging.exception(
+                "ff_print: cannot scan next-tool preheat in '%s'", path)
 
     # First-layer height, from the per-layer marker the slicer emits. This
     # feeds the print Z offset's thin-layer term, which is a FIRST-layer
@@ -272,6 +391,145 @@ def _parse_metadata(path):
     return metadata
 
 
+# ----------------------------------------------------------------- extents
+#
+# N4S4. On 2026-10-14 a job was started whose prime tower reached Y 260.018
+# while the printer reaches Y 260.0 for T0 and 259.6 for T1 (T1's nozzle sits
+# 0.414 mm further out): Klipper refused the move ("Move out of range") two
+# minutes into the job, after the nozzles were hot and the mesh was probed.
+# The file says where it goes, so it is read once, up front.
+
+def _axis_regex(axis):
+    return re.compile(
+        (r'^G[0-3](?![0-9])[^;\n]*?[ \t]%s([-+]?[0-9]*\.?[0-9]+)'
+         % axis.upper()).encode(), re.M)
+
+
+_AXIS_RE = {axis: _axis_regex(axis) for axis in 'xyz'}
+# The two things that change what a coordinate means: G90/G91 (relative moves
+# are not positions) and a bare Tn (the tool's offset is added).
+_MODE_RE = re.compile(rb'^(?:(G9[01])|T([0-3]))(?![0-9])', re.M)
+
+
+class _Extents:
+    """The smallest and largest X, Y and Z a file moves to, in machine
+    coordinates (the mounted tool's offset added, which is what Klipper
+    checks), each with the G-code value and the tool it came from."""
+
+    def __init__(self):
+        self.low = {}       # axis -> (machine, gcode, tool)
+        self.high = {}
+
+    def add(self, axis, values, offset, tool):
+        low, high = min(values), max(values)
+        if axis not in self.low or low + offset < self.low[axis][0]:
+            self.low[axis] = (low + offset, low, tool)
+        if axis not in self.high or high + offset > self.high[axis][0]:
+            self.high[axis] = (high + offset, high, tool)
+
+    def as_status(self):
+        out = {}
+        for axis in 'xyz':
+            if axis in self.low:
+                out['%s_min' % axis] = round(self.low[axis][0], 3)
+            if axis in self.high:
+                out['%s_max' % axis] = round(self.high[axis][0], 3)
+        return out
+
+
+def _scan_extents(path, offsets, initial_tool=None, budget=EXTENTS_BUDGET,
+                  chunk=EXTENTS_CHUNK, pause=time.sleep):
+    """Read the whole file for the positions it moves to.
+
+    `offsets` maps a tool to its (x, y, z) offset, `initial_tool` is the tool
+    that is mounted before the file's first `Tn`. Relative stretches (G91 to
+    the next G90) are skipped. Arcs count by their end points. Returns an
+    _Extents, or None when the file cannot be read or the budget ran out. It
+    works in pieces of `chunk` bytes and calls `pause` between them, so that
+    a thread that scans does not hold the interpreter for long."""
+    extents = _Extents()
+    state = {'tool': initial_tool, 'relative': False}
+
+    def segment(text):
+        if state['relative'] or not text:
+            return
+        offset = offsets.get(state['tool'], (0., 0., 0.))
+        for index, axis in enumerate('xyz'):
+            found = _AXIS_RE[axis].findall(text)
+            if found:
+                extents.add(axis, [float(value) for value in found],
+                            offset[index], state['tool'])
+
+    def process(text):
+        position = 0
+        for marker in _MODE_RE.finditer(text):
+            segment(text[position:marker.start()])
+            position = marker.end()
+            if marker.group(1) is not None:
+                state['relative'] = marker.group(1) == b'G91'
+            else:
+                state['tool'] = int(marker.group(2))
+        segment(text[position:])
+
+    deadline = time.monotonic() + budget
+    try:
+        carry = b''
+        with open(path, 'rb') as fh:
+            while True:
+                block = fh.read(chunk)
+                data = carry + block
+                # whole lines only: a word cut in two would be read wrongly
+                cut = len(data) if not block else data.rfind(b'\n') + 1
+                carry = data[cut:]
+                if cut:
+                    process(data[:cut])
+                if not block:
+                    return extents
+                if time.monotonic() > deadline:
+                    logging.warning(
+                        "ff_print: gave up reading '%s' for its extents after"
+                        " %.0f s; it is not checked against the machine's"
+                        " range", path, budget)
+                    return None
+                pause(EXTENTS_YIELD)
+    except Exception:
+        logging.exception("ff_print: cannot read the extents of '%s'", path)
+        return None
+
+
+def _bounds_problems(extents, low, high):
+    """What of the file lies outside [low, high], the toolhead's axis range.
+    Z is checked at the top only: the bottom of a Z range is not where a
+    print goes."""
+    problems = []
+    for index, axis in enumerate('xyz'):
+        if axis in extents.high and extents.high[axis][0] > high[index] + 1e-6:
+            problems.append((axis, 'above', extents.high[axis], high[index]))
+        if (axis != 'z' and axis in extents.low
+                and extents.low[axis][0] < low[index] - 1e-6):
+            problems.append((axis, 'below', extents.low[axis], low[index]))
+    return problems
+
+
+def _describe_problem(problem):
+    axis, side, (machine, gcode, tool), limit = problem
+    shift = machine - gcode
+    origin = "G-code %s%.3f" % (axis.upper(), gcode)
+    if tool is not None and abs(shift) >= 0.0005:
+        origin += " and T%d's offset %+.3f" % (tool, shift)
+    return ("%s %s %.1f mm (%s) -- the machine reaches %.1f mm"
+            % (axis.upper(), "up to" if side == 'above' else "down to",
+               machine, origin, limit))
+
+
+def _analyse_file(path, offsets, want_extents):
+    """Everything ff_print reads from the file; what runs in the thread."""
+    metadata = _parse_metadata(path)
+    extents = (_scan_extents(path, offsets, metadata.get('tool'))
+               if want_extents else None)
+    return metadata, extents
+
+
 class FFPrint:
     def __init__(self, config):
         self.printer = config.get_printer()
@@ -279,6 +537,10 @@ class FFPrint:
         self.gcode = self.printer.lookup_object('gcode')
         self.before_macro = config.get('before_macro', 'FF_BEFORE_PRINT_START')
         self.after_macro = config.get('after_macro', 'FF_AFTER_PRINT_END')
+        # N4S4: refuse a file that moves beyond the machine's range before
+        # anything heats or moves. On unless turned off.
+        self.check_bounds = config.getboolean('check_bounds', True)
+        self.extents = None
         self.hook_commands = [c.strip().upper() for c
                               in config.getlist('hook_commands',
                                                 ['SDCARD_PRINT_FILE', 'M23'])
@@ -325,6 +587,9 @@ class FFPrint:
             'origin': self.origin,
             'active': self.active,
             'tool': self.metadata.get('tool'),
+            'next_tool': self.metadata.get('next_tool'),
+            'next_nozzle': self.metadata.get('next_nozzle'),
+            'tools': self.metadata.get('tools', []),
             'nozzle': self.metadata.get('nozzle'),
             'bed': self.metadata.get('bed'),
             'layer': self.metadata.get('layer'),
@@ -355,6 +620,9 @@ class FFPrint:
                 'prime_tower_outer_min_y'),
             'prime_tower_outer_max_y': self.metadata.get(
                 'prime_tower_outer_max_y'),
+            # N4S4: the machine-coordinate extents of the file, as read at
+            # the start (None when not checked or not readable)
+            'extents': self.extents,
         }
 
     def _resolve(self, gcmd, cmd):
@@ -374,15 +642,90 @@ class FFPrint:
             return None
         return os.path.join(virtual_sdcard.sdcard_dirname, name)
 
+    # N4S4: the reading of the file (a few hundred KiB line by line, and with
+    # check_bounds all of it) takes a second or more on this CPU. It runs in a
+    # thread, and the reactor goes on meanwhile: the clock-sync pings, the
+    # heaters and whatever motion is still queued do not wait for it.
+    def _run_off_thread(self, func, *args):
+        box = {}
+        done = threading.Event()
+
+        def work():
+            try:
+                box['value'] = func(*args)
+            except BaseException as err:    # handed to the caller, below
+                box['error'] = err
+            finally:
+                done.set()
+
+        thread = threading.Thread(target=work, name='ff_print-scan',
+                                  daemon=True)
+        thread.start()
+        if self.reactor is None:
+            done.wait()
+        else:
+            while not done.is_set():
+                self.reactor.pause(self.reactor.monotonic() + SCAN_POLL)
+        thread.join()
+        if 'error' in box:
+            raise box['error']
+        return box['value']
+
+    def _tool_offsets(self):
+        """{tool: (x, y, z)}: what the mounted tool adds to a G-code
+        position. Empty without [ff_toolchange]: no tool frame, no offset."""
+        toolchange = self.printer.lookup_object('ff_toolchange', None)
+        try:
+            return {tool: (toolchange.offset_x[tool],
+                           toolchange.offset_y[tool],
+                           toolchange.offset_z[tool])
+                    for tool in range(EXTRUDER_COUNT)}
+        except (AttributeError, IndexError, TypeError):
+            return {}
+
+    def _axis_limits(self):
+        """The toolhead's axis range as (low, high), X Y Z, or None."""
+        toolhead = self.printer.lookup_object('toolhead', None)
+        try:
+            status = toolhead.get_status(self.reactor.monotonic())
+            return (list(status['axis_minimum'])[:3],
+                    list(status['axis_maximum'])[:3])
+        except (AttributeError, KeyError, TypeError):
+            return None
+
     def _cmd_start(self, cmd, gcmd):
         path = self._resolve(gcmd, cmd)
         self.filename = path
         self.origin = cmd
-        self.metadata = _parse_metadata(path) if path else {}
+        limits = self._axis_limits() if self.check_bounds and path else None
+        if path:
+            self.metadata, extents = self._run_off_thread(
+                _analyse_file, path,
+                self._tool_offsets() if limits is not None else {},
+                limits is not None)
+        else:
+            self.metadata, extents = {}, None
+        self.extents = extents.as_status() if extents is not None else None
         if self.metadata:
             logging.info("ff_print: %s -> %s", path, self.metadata)
         else:
             logging.info("ff_print: %s -> no slicer metadata found", path)
+        if extents is not None:
+            logging.info("ff_print: %s moves within %s (machine range %s..%s)",
+                         path, self.extents, limits[0], limits[1])
+            problems = _bounds_problems(extents, limits[0], limits[1])
+            if problems:
+                # Before the statistics, the macro and the base command: a
+                # refused file has no job and nothing has been touched.
+                message = (
+                    "ff_print: not starting %s: the file moves beyond what "
+                    "the printer reaches: %s. Move the object or the prime "
+                    "tower in the slicer and slice again (check_bounds: "
+                    "False in [ff_print] turns this check off)."
+                    % (os.path.basename(path),
+                       "; ".join(_describe_problem(p) for p in problems)))
+                logging.warning("%s", message)
+                raise gcmd.error(message)
 
         params = ['ORIGIN=%s' % (cmd,)]
         for key, name, fmt in (('bed', 'BED', '%d'), ('tool', 'TOOL', '%d'),
@@ -390,14 +733,34 @@ class FFPrint:
                                ('layer', 'LAYER', '%s')):
             if self.metadata.get(key) is not None:
                 params.append('%s=%s' % (name, fmt % (self.metadata[key],)))
+        # The tools the file uses are NOT passed on: the original's START_PRINT
+        # would then clean every one of them. A start macro that wants them
+        # reads printer.ff_print.tools.
 
-        # Let the macro raise: a refusal here must stop the print BEFORE the
-        # base command loads and resumes the file.
-        self.gcode.run_script_from_command(
-            '%s %s' % (self.before_macro, ' '.join(params)))
-        # Arm the end latch only once prepare succeeded.
-        self.active = True
-        self.previous_handlers[cmd](gcmd)
+        self._stats('note_job_prepare', path, cmd)
+        try:
+            # Let the macro raise: a refusal here must stop the print BEFORE
+            # the base command loads and resumes the file.
+            self.gcode.run_script_from_command(
+                '%s %s' % (self.before_macro, ' '.join(params)))
+            # Arm the end latch only once prepare succeeded.
+            self.active = True
+            self.previous_handlers[cmd](gcmd)
+        except Exception as err:
+            self._stats('note_job_aborted', str(err))
+            raise
+
+    def _stats(self, method, *args):
+        """Tell [ff_stats], if configured, where a job starts and ends.  The
+        statistics must never decide whether a print runs, so a failure in
+        there only reaches the log."""
+        stats = self.printer.lookup_object('ff_stats', None)
+        if stats is None:
+            return
+        try:
+            getattr(stats, method)(*args)
+        except Exception:
+            logging.exception("ff_print: ff_stats.%s failed", method)
 
     def _handle_ready(self, print_time):
         """idle_timeout:ready fires whenever the queue drains -- including a
@@ -413,6 +776,7 @@ class FFPrint:
             return
         self.active = False
         self.end_state = state
+        self._stats('note_job_ending', state)
         # Run the macro from a timer, not from this event: the handler runs in
         # the idle_timeout timeout path and should not block on a G-code script.
         self.reactor.update_timer(self.end_timer, self.reactor.NOW)
@@ -423,6 +787,7 @@ class FFPrint:
             self.gcode.run_script('%s STATE=%s' % (self.after_macro, state))
         except Exception:
             logging.exception("ff_print: %s failed", self.after_macro)
+        self._stats('note_job_finalize')
         return self.reactor.NEVER
 
 

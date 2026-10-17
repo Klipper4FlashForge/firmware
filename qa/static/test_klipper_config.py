@@ -109,6 +109,20 @@ def _parse(model):
     return cp
 
 
+N4S4 = CONFIG / "printer_n4s4.cfg"
+
+
+def _parse_with_n4s4(model):
+    """printer.base.cfg followed by printer_n4s4.cfg, in the order a printer's
+    printer.cfg includes them (10-enable-printer-n4s4.sh adds the N4S4 include
+    after the base one). Sections with the same name merge, as in klippy."""
+    text, _ = _assemble(model)
+    cp = configparser.RawConfigParser(
+        strict=False, inline_comment_prefixes=(";", "#"))
+    cp.read_string(text + "\n" + N4S4.read_text(encoding="utf-8"))
+    return cp
+
+
 # --------------------------------------------------------------------------
 # Running the macros, because parsing them is not the same as believing them.
 #
@@ -276,6 +290,25 @@ def test_dc24v_rail_follows_every_hotend(model):
     assert cp.getfloat(section, "fan_speed") == 1.0
     assert cp.getfloat(section, "shutdown_speed") == 0.0
     assert cp.getfloat(section, "kick_start_time") == 0.0
+    assert not cp.has_section("output_pin DC24V_CTL")
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_n4s4_config_leaves_the_24v_rail_to_the_heater_fan(model):
+    """printer_n4s4.cfg is included by the printer's own printer.cfg, so the
+    tests above never see it. It used to carry its own [output_pin DC24V_CTL]
+    on the pin that printer.base.cfg now gives to [heater_fan dc24v_ctl]; with
+    both loaded klippy refuses to start on the duplicate eheaterboard:PA3."""
+    cp = _parse_with_n4s4(model)
+    claims = []
+    for sec in cp.sections():
+        for opt in PIN_OPTS:
+            if cp.has_option(sec, opt) and cp.get(sec, opt).split(",")[0] \
+                    .strip().lstrip("!^~").strip() == "eheaterboard:PA3":
+                claims.append("[%s] %s" % (sec, opt))
+    assert claims == ["[heater_fan dc24v_ctl] pin"], (
+        "eheaterboard:PA3 must belong to [heater_fan dc24v_ctl] alone once "
+        "printer_n4s4.cfg is loaded on %s, got: %s" % (model, claims))
     assert not cp.has_section("output_pin DC24V_CTL")
 
 
