@@ -320,12 +320,23 @@ class FFToolchange:
         self.slow_feed = config.getint('slow_feed', 5400, minval=1)
         self.release_slow_feed = config.getint('release_slow_feed', 5400,
                                                minval=1)
+        self.grab_pullback_feed = config.getint('grab_pullback_feed',
+                                                PULLBACK_FEED, minval=1)
         self.grab_retreat_feed = config.getint('grab_retreat_feed', 1500)
         self.release_retreat_feed = config.getint('release_retreat_feed', 4800)
         self.accel_move = config.getint('accel_move', 8000)
+        # Toolchange-only travel limits, put back when the sequence ends.
+        # Unset leaves the printer's own values in force.
+        self.corner_velocity = config.getfloat('corner_velocity', None,
+                                               above=0.)
+        self.minimum_cruise_ratio = config.getfloat(
+            'minimum_cruise_ratio', None, minval=0., below=1.)
         # Opt-in: combine approach XY only inside the established dock
         # clearance corridor. Factory paths remain the default.
         self.dock_shortcuts = config.getboolean('dock_shortcuts', False)
+        # With dock_shortcuts: round the turn into a dock lane with an arc
+        # this big, kept on the bed side of x_safe. 0 keeps the corner.
+        self.corner_radius = config.getfloat('corner_radius', 0., minval=0.)
         self.soft_docking = config.getboolean('soft_docking', False)
         # File-output simulator may inject an overlap experiment controller.
         # Production has no concurrent endstop backend and stays synchronous.
@@ -338,7 +349,6 @@ class FFToolchange:
         self.contact_accel = config.getfloat('contact_accel', 50., above=0.)
         self.ease_distance = config.getfloat('ease_distance', 5., above=0.,
                                              maxval=self.contact_depth)
-        self.rail_speed = config.getfloat('rail_speed', 200., above=self.contact_speed)
         # Post-sequence accel. The app hardcodes 20000; unset, we restore the
         # limit that was live when the sequence started (a user with a lower
         # [printer] max_accel must not come out of a toolchange faster).
@@ -801,11 +811,28 @@ class FFToolchange:
         absolute, speed = (modal['absolute_coordinates'], modal['speed'])
 
         restore_accel = self.accel_restore or self._current_max_accel()
+        limits = self.printer.lookup_object('toolhead').get_status(
+            self.reactor.monotonic())
+        restore_limits = ''
+        travel_limits = ''
+        if self.corner_velocity is not None:
+            restore_limits += ' SQUARE_CORNER_VELOCITY=%.17g' % (
+                limits['square_corner_velocity'])
+            travel_limits += ' SQUARE_CORNER_VELOCITY=%.17g' % (
+                self.corner_velocity)
+        if self.minimum_cruise_ratio is not None:
+            restore_limits += ' MINIMUM_CRUISE_RATIO=%.17g' % (
+                limits['minimum_cruise_ratio'])
+            travel_limits += ' MINIMUM_CRUISE_RATIO=%.17g' % (
+                self.minimum_cruise_ratio)
         try:
+            if travel_limits:
+                self._run('SET_VELOCITY_LIMIT' + travel_limits)
             yield
         finally:
             self._run(self.stop_macro)
-            self._run('SET_VELOCITY_LIMIT ACCEL=%d' % restore_accel)
+            self._run('SET_VELOCITY_LIMIT ACCEL=%d%s'
+                      % (restore_accel, restore_limits))
 
             if not absolute:
                 self._run('G91')
@@ -832,7 +859,19 @@ class FFToolchange:
         # The segment between two X<=x_safe endpoints stays in the clear
         # half-plane. Starting outside it requires an X-only retreat first.
         position = self.printer.lookup_object('toolhead').get_position()
-        if self.dock_shortcuts and position[0] <= self.x_safe:
+        r = self.corner_radius
+        dy = dock_y - position[1]
+        if (self.dock_shortcuts and r > 0. and abs(dy) >= r
+                and position[0] <= self.x_safe):
+            # Arrive in the lane already heading +X: run in Y at
+            # x_safe - r, then a quarter arc centred on (x_safe, dock_y -+ r)
+            # ends at (x_safe, dock_y). The whole path stays at X <= x_safe.
+            side = 1. if dy > 0. else -1.
+            self._run('G1 X%.3f Y%.3f F%d'
+                      % (self.x_safe - r, dock_y - side * r, self.fast_feed))
+            self._run('%s X%.3f Y%.3f I%.3f J0'
+                      % ('G2' if side > 0. else 'G3', self.x_safe, dock_y, r))
+        elif self.dock_shortcuts and position[0] <= self.x_safe:
             self._run('G1 X%.3f Y%.3f F%d'
                       % (self.x_safe, dock_y, self.fast_feed))
         else:
@@ -892,30 +931,22 @@ class FFToolchange:
             self._run('G1 X%.6f F%.3f' % (dock_x, self.contact_speed * 60.))
             self._wait_moves()
 
-    def _empty_withdraw(self, target_x):
-        # Only after successful unlock, or a pickup attempt that never
-        # actuated the lock. No nozzle travels through the rubber here.
+    def _fast_withdraw(self, target_x):
+        # Leaving a dock empty: after a successful unlock, or a pickup
+        # attempt that never actuated the lock. Failed unlock never comes here.
         self._run('SET_VELOCITY_LIMIT ACCEL=%d' % self.accel_move)
         self._run('G1 X%.6f F%d' % (target_x, self.fast_feed))
 
-    def _soft_withdraw(self, dock_x, target_x, accelerate=False):
-        th = self.printer.lookup_object('toolhead')
+    def _carried_withdraw(self, dock_x, target_x):
+        # A picked tool leaves the rubber in one gentle move, then travels.
+        # Nothing between the two flushes the lookahead, so the gentle move
+        # hands over to the fast one without stopping.
         exit_x = self._contact_exit(dock_x)
         with self._contact_profile():
-            if not accelerate:
-                self._run('SET_VELOCITY_LIMIT ACCEL=%.3f' % self.contact_accel)
-                self._run('G1 X%.6f F%.3f' % (target_x, self.withdrawal_speed * 60.))
-                return
-            current_x = th.get_position()[0]
-            if current_x > exit_x:
-                slow_end = max(exit_x, target_x)
-                self._run('SET_VELOCITY_LIMIT ACCEL=%.3f' % self.contact_accel)
-                self._run('G1 X%.6f F%.3f' % (slow_end, self.withdrawal_speed * 60.))
-            if target_x < exit_x:
-                # The nozzle has cleared rubber and the configured margin.
-                # Restore travel acceleration only for this free-rail move.
-                self._run('SET_VELOCITY_LIMIT ACCEL=%d' % self.accel_move)
-                self._run('G1 X%.6f F%.3f' % (target_x, self.rail_speed * 60.))
+            self._run('SET_VELOCITY_LIMIT ACCEL=%.3f' % self.contact_accel)
+            self._run('G1 X%.6f F%.3f' % (exit_x, self.withdrawal_speed * 60.))
+            self._run('SET_VELOCITY_LIMIT ACCEL=%d' % self.accel_move)
+            self._run('G1 X%.6f F%d' % (target_x, self.fast_feed))
 
     def _grab(self, tool):
         """Port of CommMgr::doGrabExtruderLatest @0x7a8190."""
@@ -962,13 +993,16 @@ class FFToolchange:
 
                 if self._poll_until(self._grab_sensor, SEAT_TIMEOUT):
                     self._run(self.grab_macro)
-                    # The pullback feed is the app's literal F4800
-                    # (@0x7a9074), NOT the calibrated slow feed.
-                    if self.soft_docking:
-                        self._soft_withdraw(dock_x, dock_x - self.grab_pullback)
-                    else:
+                    if not self.soft_docking:
+                        # The pullback feed is the app's literal F4800
+                        # (@0x7a9074), NOT the calibrated slow feed.
                         self._run('G1 X%.3f F%d'
-                                  % (dock_x - self.grab_pullback, PULLBACK_FEED))
+                                  % (dock_x - self.grab_pullback,
+                                     self.grab_pullback_feed))
+                    # Soft docking runs the second lock at the dock: its
+                    # MANUAL_STEPPER flushes the lookahead, so a pullback
+                    # before it would stop dead between two exit moves.
+                    # SYNC=0 lets the lock finish during the exit.
                     self._run(self.grab2_macro)
                     break
 
@@ -977,7 +1011,7 @@ class FFToolchange:
                              attempt + 1, GRAB_ATTEMPTS, tool)
 
                 if self.soft_docking:
-                    self._empty_withdraw(self._contact_exit(dock_x))
+                    self._fast_withdraw(self._contact_exit(dock_x))
                 else:
                     self._run('G1 X%.3f' % self.x_approach)
                 self._wait_moves()
@@ -989,7 +1023,7 @@ class FFToolchange:
                     % (tool, GRAB_ATTEMPTS))
 
             if self.soft_docking:
-                self._soft_withdraw(dock_x, self.x_safe, accelerate=True)
+                self._carried_withdraw(dock_x, self.x_safe)
             else:
                 self._run('G1 X%.3f F%d' % (self.x_safe, self.grab_retreat_feed))
             self._wait_moves()
@@ -1127,7 +1161,7 @@ class FFToolchange:
             # carriage at the dock (and so do we -- the finally-clause only
             # de-energises and restores limits, it does not move).
             if self.soft_docking:
-                self._empty_withdraw(self.x_safe)
+                self._fast_withdraw(self.x_safe)
             else:
                 self._run('G1 X%.3f F%d'
                           % (self.x_safe, self.release_retreat_feed))

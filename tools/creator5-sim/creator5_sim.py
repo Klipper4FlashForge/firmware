@@ -631,7 +631,6 @@ class Creator5Sim:
                                ease_distance=self.tc._seating_ease_distance(),
                                configured_ease_distance=self.tc.ease_distance,
                                empty_exit_speed=self.tc.fast_feed / 60.,
-                               rail_speed=self.tc.rail_speed,
                                rail_accel=self.tc.accel_move,
                                motor_mode=self.motor_mode,
                                heating_rate=self.heating_rate, initial_temperature=self.initial_temp,
