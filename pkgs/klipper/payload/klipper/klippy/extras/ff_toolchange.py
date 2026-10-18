@@ -312,7 +312,7 @@ class FFToolchange:
         # Travel: feed (mm/min) and accel for every toolchange move outside
         # the dock contact span. 36000 is this printer's max_velocity.
         self.fast_feed = config.getint('fast_feed', 36000, minval=1)
-        self.accel_move = config.getint('accel_move', 9600)
+        self.accel_move = config.getint('accel_move', 8640)
         # Toolchange-only travel limits, put back when the sequence ends:
         # a 90-degree turn at 20 mm/s instead of the printing 9, and short
         # legs allowed to reach full speed (a printing ratio caps them).
