@@ -18,7 +18,7 @@ MODULE = (ROOT / "pkgs" / "klipper" / "payload" / "klipper" / "klippy" /
           "extras" / "ff_toolchange.py")
 
 
-def make(position, corner_radius=20., dock_shortcuts=True):
+def make(position, corner_radius=20.):
     spec = importlib.util.spec_from_file_location("anvil_ff_toolchange", MODULE)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -27,7 +27,6 @@ def make(position, corner_radius=20., dock_shortcuts=True):
     tc.printer = SimpleNamespace(lookup_object=lambda name, default=None: toolhead)
     tc.x_safe = 250.
     tc.fast_feed = 36000
-    tc.dock_shortcuts = dock_shortcuts
     tc.corner_radius = corner_radius
     commands = []
     tc._run = commands.append
@@ -65,14 +64,12 @@ def test_arc_stays_behind_x_safe_and_enters_lane_heading_x(start, dock_y, arc):
     assert max(sx, cx) <= tc.x_safe
 
 
-@pytest.mark.parametrize("start,radius,shortcuts,expected", [
-    ((250., 100.), 20., True, ['G1 X250.000 Y106.300 F36000']),   # too close
-    ((250., 55.7), 0., True, ['G1 X250.000 Y205.300 F36000']),    # disabled
-    ((280., 55.7), 20., True, ['G1 X250.000 F36000', 'G1 Y205.300']),
-    ((250., 55.7), 20., False, ['G1 X250.000 F36000', 'G1 Y205.300']),
+@pytest.mark.parametrize("start,radius,expected", [
+    ((250., 100.), 20., ['G1 X250.000 Y106.300 F36000']),   # too close
+    ((250., 55.7), 0., ['G1 X250.000 Y205.300 F36000']),    # disabled
+    ((280., 55.7), 20., ['G1 X250.000 F36000', 'G1 Y205.300']),  # outside
 ])
-def test_corner_falls_back_without_room_or_shortcuts(start, radius, shortcuts,
-                                                     expected):
-    tc, commands = make(start, radius, shortcuts)
+def test_corner_falls_back_without_room_or_radius(start, radius, expected):
+    tc, commands = make(start, radius)
     tc._move_to_dock_y(106.3 if start[1] == 100. else 205.3)
     assert commands == expected

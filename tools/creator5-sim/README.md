@@ -63,9 +63,7 @@ T2's Y180 row at X271.98, is now covered by a passing regression and a separate
 injected-fault test that still rejects the bad move before planning.
 
 The fix is in the shipped `ff_toolchange` move transform, scoped to AFC's
-`Restoring` state; it is not a simulator-only bypass. The approach shortcut
-remains opt-in (`dock_shortcuts: True`) and enabled in the public simulator
-scenes. Nothing has been installed onto the real printer.
+`Restoring` state; it is not a simulator-only bypass.
 
 Use `--overrides path/to/calibration.cfg` for real per-tool `dock_x`, `dock_y`,
 `nozzle_x/y/z`, `z_adjust`, and `[ff_toolchange]` or `[printer]` settings.
@@ -172,10 +170,10 @@ simulation results; absolute real-printer timing remains uncalibrated.
 
 ### Gentle rubber contact and fast clear travel
 
-The public scenes enable `soft_docking`. The option remains off by default
-in shipped printer configuration. A configured 20 mm contact depth plus a
-5 mm margin moves the slow-entry boundary to D−25, where D is each calibrated
-dock X. Geometry overlapping `x_safe` is rejected before any dock motion.
+Gentle seating is the only dock motion; there is no factory trajectory to
+switch back to. The shipped contact span is 2.5 mm depth plus a 2.5 mm
+margin, D−5 to D, where D is each calibrated dock X; the public scenes keep
+their older 20 + 5 mm trial span and 70 mm/s contact speed. Geometry overlapping `x_safe` is rejected before any dock motion.
 
 The public simulator trial uses `contact_speed: 70` mm/s; the shipped
 hardware default remains 20 mm/s. The approach uses normal acceleration and
@@ -187,13 +185,12 @@ From there, **one move** to D keeps the contact speed cap and lowers
 acceleration to 150 mm/s². The final move enters at 70 mm/s and decelerates through 16.33 mm to zero. There is no pause or
 separate crawl. Lock/unlock follows the completed stop.
 
-Withdrawal with a tool stays at `withdrawal_speed: 35` mm/s through the rubber
-and margin, independently of the faster seating approach.
-Pickup retains the mandatory 20 mm first pullback and second lock command.
-The 150 mm/s² acceleration limit applies until D−25, where the nozzle has
-cleared both rubber and margin. The remaining clear-rail move restores
-normal travel acceleration (8000 mm/s²) with a 200 mm/s speed ceiling.
-There is no stop at the transition. Successful unlock permits empty-carriage withdrawal at the
+Pickup runs both lock commands at the dock: the second one's
+`MANUAL_STEPPER` flushes the lookahead, so the app's 20 mm pullback between
+them stopped the head dead; with `SYNC=0` the lock now finishes during the
+exit. The tool leaves the contact span at `withdrawal_speed` and the
+contact acceleration, then carries on at the travel feed and acceleration
+with no stop at the transition. Successful unlock permits empty-carriage withdrawal at the
 normal fast feed and acceleration. A pickup attempt that never actuated the
 lock may also back out empty at the fast feed. Failed unlock never uses the
 empty fast exit.
@@ -256,16 +253,12 @@ paths; use the files loaded by your running Klipper installation if different.
 Keep the unit's dock and nozzle calibration in `printer.cfg`.
 
 ```ini
-dock_shortcuts: True
-soft_docking: True
 contact_depth: 20
 contact_margin: 5
 contact_speed: 70
 withdrawal_speed: 35
 contact_accel: 150
 ease_distance: 5
-rail_speed: 200
-accel_move: 8000
 grab_macro: FF_MOTOR_GRAB
 grab2_macro: FF_MOTOR_GRAB2
 release_macro: FF_MOTOR_RELEASE
@@ -312,13 +305,10 @@ Klipper to revert the trial.
 
 ### T0 to T3 trajectory comparison
 
-The current T0→T3 scene uses the shorter clear approach and gentle seating.
-The trajectory-only regression comparison explicitly disables gentle seating
-in both runs, so its feeds, acceleration, lock commands and checks stay equal.
-The reference trajectory-only test keeps pickup retreat at 25 mm/s. The opt-in `ff_toolchange.dock_shortcuts`
-setting combines the initial approach to safe X / dock Y when its entire
-straight segment stays at machine X≤`x_safe`. Starting outside that corridor
-retains the original X-only retreat before moving Y.
+The approach to safe X / dock Y is one move when its entire straight segment
+stays at machine X≤`x_safe`, ending in a quarter arc of `corner_radius` into
+the dock lane. Starting outside that corridor retains the X-only retreat
+before moving Y.
 
 For the center-start fixture, the release approach changes from
 (150,150)→(250,150)→(250,20), a 230 mm path, to

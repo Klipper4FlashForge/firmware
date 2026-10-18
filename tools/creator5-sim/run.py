@@ -124,9 +124,6 @@ moonraker_port: {port}
 [delayed_gcode _FF_AFC_PREP]
 initial_duration: 0
 [ff_toolchange]
-grab_retreat_feed: {args.retreat_feed}
-dock_shortcuts: {bool(args.dock_shortcuts)}
-soft_docking: {bool(args.soft_docking)}
 contact_speed: {args.contact_speed}
 withdrawal_speed: {args.withdrawal_speed}
 contact_accel: {args.contact_accel}
@@ -167,7 +164,7 @@ gcode:
 
 
 DEFAULTS = dict(sensor_delay=.05, lock_time=None, heating_rate=3., temperature=220.,
-                retreat_feed=1500, fail_grab=-1, fail_unlock=False, dock_shortcuts=0, soft_docking=0, contact_speed=20.,
+                fail_grab=-1, fail_unlock=False, contact_speed=20.,
                 withdrawal_speed=20., contact_accel=50., async_unlock=0, unlock_duration=None, fail_seat=-1)
 
 
@@ -176,7 +173,7 @@ def run_one(name, args, klipper, port):
     settings = dict(DEFAULTS, **scene.get('settings', {}))
     settings.update({key: getattr(args, key) for key in DEFAULTS
                      if getattr(args, key) is not None})
-    if not settings['soft_docking'] or settings['lock_time'] is not None:
+    if settings['lock_time'] is not None:
         if args.async_unlock is None:
             settings['async_unlock'] = 0
         if args.unlock_duration is None:
@@ -253,7 +250,7 @@ def main():
         if key == 'fail_unlock':
             parser.add_argument('--fail-unlock', action='store_true', default=None)
         else:
-            parser.add_argument('--' + key.replace('_', '-'), type=int if key in ['retreat_feed', 'fail_grab', 'dock_shortcuts', 'soft_docking', 'async_unlock', 'fail_seat'] else float,
+            parser.add_argument('--' + key.replace('_', '-'), type=int if key in ['fail_grab', 'async_unlock', 'fail_seat'] else float,
                                 default=None)
     parser.add_argument('--overrides', type=Path,
                         help='Config with measured tool calibration or motion setting overrides')

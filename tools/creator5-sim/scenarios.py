@@ -190,8 +190,6 @@ for x in (240, 245, 280):
                            'gcode': brush(x, relative), 'settings': {}}
 SCENARIOS['brush-offset'] = {'label': 'Brush with T3 offset',
                               'gcode': brush(tool=3), 'settings': {}}
-SCENARIOS['faster'] = dict(SCENARIOS['swap'], label='Swaps with faster retreat',
-                           settings={'retreat_feed': 4800})
 SCENARIOS['missing-grab'] = dict(SCENARIOS['swap'], label='Failed T1 grab',
                                  settings={'fail_grab': 1}, expected_error='grab sensor never activated')
 SCENARIOS['failed-unlock'] = dict(SCENARIOS['swap'], label='Failed unlock',
@@ -223,27 +221,23 @@ SIM_CHECK TOOL=3 X={x} Y=150 Z=10
 SIM_REPORT
 """
 
-SCENARIOS['t0-t3-baseline'] = {
-    'label': 'T0 → T3 · original trajectory',
-    'gcode': swap_t0_t3(), 'settings': {},
-}
 SCENARIOS['t0-t3-trajectory'] = {
     'label': 'T0 → T3 · gentle seat and clear approach',
-    'gcode': swap_t0_t3(), 'settings': {'dock_shortcuts': 1},
+    'gcode': swap_t0_t3(), 'settings': {},
 }
 SCENARIOS['t0-t3-outside'] = {
     'label': 'T0 → T3 · outside start, guarded approach',
-    'gcode': swap_t0_t3(x=280), 'settings': {'dock_shortcuts': 1},
+    'gcode': swap_t0_t3(x=280), 'settings': {},
 }
 SCENARIOS['all-pairs-trajectory'] = dict(
     SCENARIOS['all-pairs'], label='All 12 tool pairs · gentle seating',
-    settings={'dock_shortcuts': 1})
+    settings={})
 SCENARIOS['dock-offset-boundary'] = {
     'label': 'Dock approach · tool offset puts X outside clearance',
     'gcode': swap_t0_t3(x=249.9).replace('T0\n', 'T3\n', 1)
               .replace('SIM_BEGIN\nT3\n', 'SIM_BEGIN\nT0\n')
               .replace('SIM_CHECK TOOL=3', 'SIM_CHECK TOOL=0'),
-    'settings': {'dock_shortcuts': 1},
+    'settings': {},
 }
 
 for x in (150, 280):
@@ -267,6 +261,6 @@ CURRENT_REPLAYS = (
 for name, scene in SCENARIOS.items():
     scene['visible'] = name in CURRENT_REPLAYS
     if scene['visible']:
-        scene['settings'] = dict(scene['settings'], dock_shortcuts=1, soft_docking=1, contact_speed=70.,
+        scene['settings'] = dict(scene['settings'], contact_speed=70.,
                                  withdrawal_speed=35., contact_accel=150.,
                                  async_unlock=0, unlock_duration=None)

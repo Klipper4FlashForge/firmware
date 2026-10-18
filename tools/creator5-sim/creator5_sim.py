@@ -222,8 +222,8 @@ class Creator5Sim:
             self.printer.objects['gcode_button ' + name] = Sensor(self, name)
         self.tc.reactor = Clock(self)
         if self.async_unlock:
-            if not self.tc.soft_docking or self.motor_mode != 'production':
-                raise self.printer.command_error('Async unlock needs soft docking and production motor planning')
+            if self.motor_mode != 'production':
+                raise self.printer.command_error('Async unlock needs production motor planning')
             self.tc.release_overlap = self
         append = self.toolhead.trapq_append
 
@@ -617,7 +617,6 @@ class Creator5Sim:
         summary['dock_warnings'] = len(self.dock_warnings)
         data = dict(summary=summary, begin=self.begin, end=end,
                     model=dict(sensor_delay=self.sensor_delay, lock_time=self.lock_time,
-                               soft_docking=self.tc.soft_docking,
                                contact_depth=self.tc.contact_depth,
                                dock_support_depth=self.dock_support_depth,
                                unlock_preview_seconds=self.unlock_preview_seconds,

@@ -52,7 +52,7 @@ documented in the file headers.
   mounted, or on an uncalibrated machine, Z=0 is still ~3.2 mm *below* the
   plate — the print gate refuses to start in that state.
 * **Where the numbers live.** Nothing is read from firmwareExe's JSON at
-  runtime any more. Feeds and staging positions (`[ff_toolchange]`) are
+  runtime any more. Dock motion settings (`[ff_toolchange]`) are
   plain config in `ff-toolchange.cfg`. Per-unit values — `dock_x/dock_y`,
   `nozzle_x/y/z` and `z_adjust` per tool, `station_x/y/z`, `cylinder_x/y` —
   are written by the import/calibration commands (`configfile.set`) and persisted with
@@ -178,8 +178,9 @@ scp pkgs/klipper-config/payload/config/ff-*.cfg \
    waiting on.
 
    Nothing to paste either way; the import only prints an `[ff_toolchange]`
-   snippet if a feed in the JSON differs from the running config (it does not
-   on a stock unit).
+   snippet if `grabOffset` or `tempOffset` in the JSON differs from the
+   running config (it does not on a stock unit). The JSON's feeds are not
+   used: the dock motion is Reforge's own.
 
 6. `TOOLCHANGE_STATUS` and `TOOL_OFFSET_STATUS` — every tool should show a
    nozzle triple and a dock position, the station `z` must be present;
