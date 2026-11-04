@@ -279,7 +279,9 @@ _pkg_visit() {
     for _d in $( ( pkg_conf "$1"; printf '%s' "$PKG_BUILD_DEPENDS" ) ); do
         _pkg_visit "$_d"
     done
-    _path="${_path% "$1" }"
+    # Put back the separator the strip takes with it, or the next sibling is
+    # glued onto its parent: " a" + "c " is " ac ", where neither a nor c is.
+    _path="${_path% "$1" } "
     _seen="$_seen$1 "
     _order="$_order $1"
 }

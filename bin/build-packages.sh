@@ -88,7 +88,12 @@ else
     mapfile -t REQUESTED < <(pkg_recipes)
 fi
 [ ${#REQUESTED[@]} -gt 0 ] || { echo "no recipes under pkgs/" >&2; exit 1; }
-read -r -a RECIPES <<< "$(pkg_order "${REQUESTED[@]}")"
+# An assignment of its own, so set -e sees pkg_order fail. Inside the
+# here-string its exit status was lost: a cycle printed its error and the run
+# went on with an empty list, built nothing, re-indexed the old feed and
+# exited 0.
+ORDER=$(pkg_order "${REQUESTED[@]}")
+read -r -a RECIPES <<< "$ORDER"
 
 say "order: ${RECIPES[*]}"
 mkdir -p "$PKG_FEED"
