@@ -16,6 +16,9 @@ with Klipper and a toolchanger-aware web and touchscreen experience.
 | Bed mesh | Factory mesh import, 10×10 probing, save/load through `MESH_DATA` | ✅ Yes |
 | Filament | Tool-specific load, unload, purge, cold wipe, material temperatures | ✅ Yes |
 | Runout and clog | Mounted-tool sensors pause prints and support load/resume recovery | ✅ Yes |
+| Tool mapping | Print any slicer tool number on any head, remembered across restarts ([how](filament-and-spools.md)) | 🧪 Not yet on hardware† |
+| Infinite spool | A named backup head takes over when a spool runs out mid-print | 🧪 Not yet on hardware† |
+| Spoolman | One spool per head; the head in use is the active spool | 🧪 Not yet on hardware† |
 | Pressure advance | Automatic FlashForge-compatible sweep, HelixScreen integration, and slicer-oriented results | ✅ Yes* |
 | VFA calibration | Klipper VFA support with required MCU library and dependency | ✅ Yes |
 | Chamber | Pro heater/light configuration and heater-following fan; heater-free Creator 5 config | ✅ Yes |
@@ -28,3 +31,6 @@ with Klipper and a toolchanger-aware web and touchscreen experience.
 
 \* Pressure advance is a manual check. See the [pressure advance calibration
 guide](pressure-advance.md).
+
+† New. It installs and loads in the printer replica, but no swap or runout
+has run on a real printer yet. See [Filament and spools](filament-and-spools.md).

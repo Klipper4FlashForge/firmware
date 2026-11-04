@@ -71,7 +71,20 @@ import pytest
 # setup.py for it would be one more thing that can disagree with reality.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-LANES = ("static", "replica")
+LANES = ("static", "replica", "simulator")
+
+
+def pytest_addoption(parser):
+    parser.addoption('--run-simulator', action='store_true',
+                     help='Run desktop Klipper/AFC simulation scenarios')
+
+
+def pytest_collection_modifyitems(config, items):
+    if config.getoption('--run-simulator'):
+        return
+    excluded = [item for item in items if item.get_closest_marker('simulator')]
+    items[:] = [item for item in items if not item.get_closest_marker('simulator')]
+    config.hook.pytest_deselected(items=excluded)
 
 
 def pytest_configure(config):

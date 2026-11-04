@@ -42,11 +42,11 @@ per-tool nudge, `TEMPERATURE_WAIT ±3`, chamber fans off. Then, verbatim from th
 is left at temp−100 as the app leaves it; `speed` is 80 for a 0.25 mm nozzle, else 240.
 
 Temperatures, in precedence order: the paired `TOOLS=<n>:<temp>`, then positional `TEMPS`
-indexed by tool number, then — and this is the fallback that actually fires — the slot's
-material in `_FF_FILAMENT.tool_material` looked up in `_FF_FILAMENT.temps`, exactly as the
-app did. Only if that material is unknown does it fall back to `TEMP` (which START_PRINT
-sets to NOZZLE). So with the shipped `tool_material: ['PLA','PLA','PLA','PLA']`, a
-`START_PRINT NOZZLE=240` with no per-tool temperature cleans at **220**, not 240.
+indexed by tool number, then AFC's record of the head (`AFC_lane e<n>`): its own
+`extruder_temp` (Spoolman's, when a spool is assigned), else its `material` looked up in
+`_FF_FILAMENT.temps` — the app's lookup, fed from AFC instead of a fixed list. Only when AFC
+knows nothing does it fall back to `TEMP` (which START_PRINT sets to NOZZLE), so a head with
+no recorded material cleans at the print's own temperature.
 
 ## Deliberate divergences
 

@@ -31,8 +31,6 @@ VERIFY_TIMEOUT = 20 * POLL_INTERVAL     # post-sequence verification
 GRAB_ATTEMPTS = 3
 RELEASE_ATTEMPTS = 3
 RELEASE_RETRIES = 3         # MOTOR_RELEASE sends per attempt (fail on 3rd)
-RELEASE_STAGE_BACKOFF = 10.0    # release staging "G1 X<dock-10>" (@0xdb6af8)
-PULLBACK_FEED = 4800            # grab pullback's literal " F4800" (@0xdb4d40)
 
 # Firmware error codes. Per-tool families report E<base + tool>; both grab
 # and release map through the LANG_SRC table built at 0x689838.
@@ -57,7 +55,7 @@ ERR_RELEASE_STATE = 144         # E0144    state error after release verify
 # support discover one by object NAME in objects/list: `toolchanger` plus one
 # `tool <name>` per tool. Those names are registered as read-only views over
 # this module and the [ff_tool n] sections, with the commands such UIs send
-# (SELECT_TOOL, UNSELECT_TOOL, INITIALIZE_TOOLCHANGER, ASSIGN_TOOL).
+# (SELECT_TOOL, UNSELECT_TOOL).
 #
 # HelixScreen subscribes (src/api/moonraker_discovery_sequence.cpp):
 #   toolchanger : status (ready|changing|error|uninitialized), tool_number,
@@ -143,6 +141,26 @@ class _ToolView:
                 'calibrated': tool.calibrated()}
 
 
+# AFC (anvil-afc, ff-afc.cfg) asks each [AFC_extruder] whether its head is on
+# the carriage. That answer decides which lane AFC calls current, and so
+# whether a T<n> grabs anything at all: with no answer AFC treats every head
+# as mounted, and a T0 after a park reads "already loaded" and grabs nothing.
+# Of the two ways AFC asks, the klipper-toolchanger one imports that project's
+# module; the other looks up `park_detector <name>` and calls
+# get_park_detector_status(), which is all this view is. No get_status, so it
+# stays out of objects/list and no UI shows a second copy of `tool T<n>`.
+class _ParkDetectorView:
+    def __init__(self, toolchanger, index):
+        self.toolchanger = toolchanger
+        self.index = index
+
+    def get_park_detector_status(self):
+        eventtime = self.toolchanger.reactor.monotonic()
+        mounted = self.toolchanger.get_status(eventtime)['current_tool']
+        return {'state': 'ACTIVATE' if mounted == self.index
+                else 'DEACTIVATE'}
+
+
 class _ToolTransform:
     """Per-tool XYZ, applied BELOW Klipper's own G-code offset.
 
@@ -192,11 +210,26 @@ class _ToolTransform:
 
     def move(self, newpos, speed):
         offsets = self._offsets()
-        if offsets is None:
-            return self.next_transform.move(newpos, speed)
-        return self.next_transform.move(
-            [newpos[0] + offsets[0], newpos[1] + offsets[1],
-             newpos[2] + offsets[2]] + list(newpos[3:]), speed)
+        target = list(newpos)
+        if offsets is not None:
+            target[:3] = [newpos[i] + offsets[i] for i in range(3)]
+        afc = self.toolchange.printer.lookup_object('AFC', None)
+        if afc is not None and str(afc.current_state) == 'Restoring':
+            current = list(self.next_transform.get_position())
+            safe_x = self.toolchange.x_safe
+            if abs(target[1] - current[1]) > 1e-6 and max(current[0], target[0]) > safe_x:
+                # AFC restores a nozzle position through this transform.
+                # Route in machine XY after applying the incoming tool's
+                # offsets. Y travel must stay clear of the occupied docks.
+                if current[0] > safe_x:
+                    current[0] = safe_x
+                    self.next_transform.move(list(current), speed)
+                if target[0] > safe_x:
+                    current[1] = target[1]
+                    self.next_transform.move(list(current), speed)
+                # If the destination is inside the corridor, the remaining
+                # diagonal is clear; otherwise this final move changes X only.
+        return self.next_transform.move(target, speed)
 
     def get_position(self):
         base = self.next_transform.get_position()
@@ -255,7 +288,7 @@ class FFToolchange:
         # clearing one does not silently clear the other.
         self.job_z = 0.0
         self.refresh_offsets()
-        # True while a tool select/change/park sequence is running (reported as
+        # True while a SELECT_TOOL or park sequence is running (reported as
         # toolchanger.status = 'changing').
         self.changing = False
         # Reported as every tool's `fan`: the part-cooling fan is shared on
@@ -264,62 +297,72 @@ class FFToolchange:
         self.part_fan = config.get('part_fan', 'fan_generic fanM106')
         for oname, view in [('toolchanger', _ToolchangerView(self))] + [
                 ('tool T%d' % i, _ToolView(self, i))
+                for i in range(EXTRUDER_COUNT)] + [
+                ('park_detector T%d' % i, _ParkDetectorView(self, i))
                 for i in range(EXTRUDER_COUNT)]:
             if self.printer.lookup_object(oname, None) is not None:
                 raise config.error(
                     "%s: Klipper object '%s' already exists (real"
                     " klipper-toolchanger installed?)" % (self.name, oname))
             self.printer.add_object(oname, view)
-        # Staging positions. These are code constants in the app, not config.
+        # The clear corridor: Y travel only at X <= x_safe, where the
+        # carriage cannot reach the parked tools. The app's constant.
         self.x_safe = config.getfloat('x_safe', 250.0)
-        self.x_approach = config.getfloat('x_approach', 280.0)
-        self.grab_pullback = config.getfloat('grab_pullback', 20.0)
 
-        # Feeds (mm/min). The app reads grabSpeed/grabSpeedSlow (mm/s) from
-        # test.json and multiplies by 60 -- 500/90 on this unit, i.e.
-        # 30000/5400 -- falling back to 24000/6000 (5400 on release) when the
-        # stored value is <= 0. Defaults here are the factory numbers.
-        self.fast_feed = config.getint('fast_feed', 30000, minval=1)
-        self.slow_feed = config.getint('slow_feed', 5400, minval=1)
-        self.release_slow_feed = config.getint('release_slow_feed', 5400,
-                                               minval=1)
-        self.grab_retreat_feed = config.getint('grab_retreat_feed', 1500)
-        self.release_retreat_feed = config.getint('release_retreat_feed', 4800)
-        self.accel_move = config.getint('accel_move', 8000)
+        # Travel: feed (mm/min) and accel for every toolchange move outside
+        # the dock contact span. 36000 is this printer's max_velocity.
+        self.fast_feed = config.getint('fast_feed', 36000, minval=1)
+        self.accel_move = config.getint('accel_move', 8640)
+        # Toolchange-only travel limits, put back when the sequence ends:
+        # a 90-degree turn at 20 mm/s instead of the printing 9, and short
+        # legs allowed to reach full speed (a printing ratio caps them).
+        self.corner_velocity = config.getfloat('corner_velocity', 20.,
+                                               above=0.)
+        self.minimum_cruise_ratio = config.getfloat(
+            'minimum_cruise_ratio', 0., minval=0., below=1.)
+        # The turn into a dock lane is a quarter arc this big, kept on the
+        # bed side of x_safe. 0 makes it a corner.
+        self.corner_radius = config.getfloat('corner_radius', 20., minval=0.)
+        # File-output simulator may inject an overlap experiment controller.
+        # Production has no concurrent endstop backend and stays synchronous.
+        self.release_overlap = None
+        # The dock contact span, D - depth - margin .. D: the rubber is
+        # 3-5 mm from the rest position. Seating crosses it at contact_speed
+        # and brakes at contact_accel from ease_distance out; a picked tool
+        # leaves it at withdrawal_speed. Everything else is travel.
+        self.contact_depth = config.getfloat('contact_depth', 2.5, above=0.)
+        self.contact_margin = config.getfloat('contact_margin', 2.5, above=0.)
+        self.contact_speed = config.getfloat('contact_speed', 20., above=0.)
+        self.withdrawal_speed = config.getfloat('withdrawal_speed', 20., above=0.,
+                                                maxval=self.contact_speed)
+        self.contact_accel = config.getfloat('contact_accel', 50., above=0.)
+        self.ease_distance = config.getfloat(
+            'ease_distance', 5., above=0.,
+            maxval=self.contact_depth + self.contact_margin)
         # Post-sequence accel. The app hardcodes 20000; unset, we restore the
         # limit that was live when the sequence started (a user with a lower
         # [printer] max_accel must not come out of a toolchange faster).
         self.accel_restore = config.getint('accel_restore', None)
 
-        # klipper-toolchanger's RESTORE_AXIS. Empty means restore nothing,
-        # which is what this machine did before the parameter existed: a stock
-        # file's start block places the toolhead itself.
-        self.restore_axis = self._parse_axes(
-            config.get('restore_axis', ''), config.error, 'restore_axis')
-        self.restore_feed = config.getint('restore_feed', 9000, minval=1)
-        # Protection for the trip back to the restored X/Y after a real
-        # change, used only when restore_axis names X or Y. The old tool is
-        # raised restore_z_hop before it crosses the part to its dock; the
-        # new tool, still seated in its dock, retracts restore_retract of
-        # filament before it is pulled out so a hot nozzle does not drag an
-        # ooze string; and it travels at the raised Z, descends, then
-        # unretracts restore_unretract at the target. Raising and retracting
-        # are separate switches. All default to zero, which leaves the
-        # change exactly as it was.
-        self.restore_z_hop = config.getfloat('restore_z_hop', 0., minval=0.)
-        self.restore_z_feed = config.getint('restore_z_feed', 1200, minval=1)
-        self.restore_retract = config.getfloat(
-            'restore_retract', 0., minval=0.)
-        self.restore_retract_feed = config.getint(
-            'restore_retract_feed', 1800, minval=1)
-        # Less than the retract is deliberate: the slicer's own extrusion
-        # fills the rest while moving, instead of a blob from a stationary
-        # prime at the target.
-        self.restore_unretract = config.getfloat(
-            'restore_unretract', self.restore_retract, minval=0.,
-            maxval=self.restore_retract)
-        self.restore_unretract_feed = config.getint(
-            'restore_unretract_feed', self.restore_retract_feed, minval=1)
+        # In-dock retract, for a change AFC is going to move back from. The
+        # new head, locked but still seated in its dock, pulls back
+        # dock_retract of filament before it is drawn out, so a hot nozzle
+        # does not drag an ooze string across the print; once AFC has put it
+        # back over the print (its restore_pos), dock_unretract of it is
+        # given back. Less than the retract is deliberate: the slicer's own
+        # extrusion fills the rest while moving, instead of a blob from a
+        # stationary prime. Both zero, as shipped, changes nothing. The
+        # Z-hop that went with these before AFC is AFC's own [AFC] z_hop.
+        self.dock_retract = config.getfloat('dock_retract', 0., minval=0.)
+        self.dock_retract_feed = config.getint(
+            'dock_retract_feed', 1800, minval=1)
+        self.dock_unretract = config.getfloat(
+            'dock_unretract', self.dock_retract, minval=0.,
+            maxval=self.dock_retract)
+        self.dock_unretract_feed = config.getint(
+            'dock_unretract_feed', self.dock_retract_feed, minval=1)
+        # Filament retracted in the dock and still owed back.
+        self.pending_unretract = 0.
 
         # Sensor names.
         #  position buttons: one per tool, PRESSED == that tool is docked.
@@ -350,25 +393,20 @@ class FFToolchange:
         # default here is to abort and let the user home deliberately.
         self.auto_home = config.getboolean('auto_home', False)
 
-        # Runout / clog sensors. firmwareExe keeps only the MOUNTED tool's
-        # filament_motion_sensor enabled and pauses on that channel's switch
-        # sensor. Here both kinds are armed for the mounted tool on every grab
-        # and disarmed on release; what a runout DOES is the sensors'
-        # runout_gcode (ff-runout.cfg: _FF_RUNOUT). Names are <prefix><tool>;
-        # an empty or absent prefix turns that kind off.
-        self.runout_switch_prefix = config.get('runout_switch_prefix',
-                                               'fd_ex').strip()
+        # Clog sensors. firmwareExe keeps only the MOUNTED tool's
+        # filament_motion_sensor enabled; so does this, arming it on every
+        # grab and disarming everything on release. What a clog DOES is the
+        # sensors' runout_gcode (ff-runout.cfg: _FF_RUNOUT). Names are
+        # <prefix><tool>; an empty prefix turns clog detection off. The
+        # presence switches (fd_ex*) are not ours: AFC reads their pins and
+        # owns runout (ff-afc.cfg).
         self.runout_motion_prefix = config.get('runout_motion_prefix',
                                                'fm_ex').strip()
-        self.runout_switch = []     # full object names, resolved at connect
-        self.runout_motion = []
+        self.runout_motion = []     # full object names, resolved at connect
         self.armed_tool = -1
 
-        self.gcode.register_command(
-            'TOOLCHANGE', self.cmd_TOOLCHANGE, desc=self.cmd_TOOLCHANGE_help)
-        for i in range(EXTRUDER_COUNT):
-            self.gcode.register_command(
-                'T%d' % i, self._make_tn(i), desc="Select tool %d" % i)
+        # No T<n>: AFC owns T0..T3 (ff-afc.cfg) and resolves each through its
+        # lane map to a SELECT_TOOL, which is the physical-number entry point.
         self.gcode.register_command(
             'TOOLCHANGE_STATUS', self.cmd_TOOLCHANGE_STATUS,
             desc=self.cmd_TOOLCHANGE_STATUS_help)
@@ -381,26 +419,13 @@ class FFToolchange:
         self.gcode.register_command(
             'TOOL_Z_ADJUST', self.cmd_TOOL_Z_ADJUST,
             desc=self.cmd_TOOL_Z_ADJUST_help)
-        # klipper-toolchanger command names
+        # klipper-toolchanger's names for the two things AFC and HelixScreen
+        # send: grab a head, dock the mounted one.
         self.gcode.register_command(
             'SELECT_TOOL', self.cmd_SELECT_TOOL, desc=self.cmd_SELECT_TOOL_help)
         self.gcode.register_command(
             'UNSELECT_TOOL', self.cmd_UNSELECT_TOOL,
             desc=self.cmd_UNSELECT_TOOL_help)
-        self.gcode.register_command(
-            'INITIALIZE_TOOLCHANGER', self.cmd_INITIALIZE_TOOLCHANGER,
-            desc=self.cmd_INITIALIZE_TOOLCHANGER_help)
-        self.gcode.register_command(
-            'ASSIGN_TOOL', self.cmd_ASSIGN_TOOL, desc=self.cmd_ASSIGN_TOOL_help)
-        self.gcode.register_command(
-            'SET_TOOL_TEMPERATURE', self.cmd_SET_TOOL_TEMPERATURE,
-            desc=self.cmd_SET_TOOL_TEMPERATURE_help)
-        self.gcode.register_command(
-            'VERIFY_TOOL_DETECTED', self.cmd_VERIFY_TOOL_DETECTED,
-            desc=self.cmd_VERIFY_TOOL_DETECTED_help)
-        self.gcode.register_command(
-            'SELECT_TOOL_ERROR', self.cmd_SELECT_TOOL_ERROR,
-            desc=self.cmd_SELECT_TOOL_ERROR_help)
         self.gcode.register_command(
             'FF_RUNOUT_ARM', self.cmd_FF_RUNOUT_ARM,
             desc=self.cmd_FF_RUNOUT_ARM_help)
@@ -527,8 +552,6 @@ class FFToolchange:
             if command.upper() not in macros:
                 missing.append("gcode_macro %s" % command)
 
-        self.runout_switch = self._resolve_runout_sensors(
-            'filament_switch_sensor', self.runout_switch_prefix, missing)
         self.runout_motion = self._resolve_runout_sensors(
             'filament_motion_sensor', self.runout_motion_prefix, missing)
 
@@ -538,7 +561,7 @@ class FFToolchange:
                 % (self.name, ", ".join(missing)))
 
     def _resolve_runout_sensors(self, module, prefix, missing):
-        """[] when the kind is off (empty prefix / no such sections);
+        """[] when clog detection is off (empty prefix / no such sections);
         all four names when complete; a config error when only some exist."""
         if not prefix:
             return []
@@ -585,6 +608,7 @@ class FFToolchange:
 
     def _handle_ready(self):
         self._log_transform_chain()
+        self._hook_afc_restore()
         # The frame after a restart is whatever is on the carriage: klippy
         # restarts do not drop a tool, and leaving the frame at None would
         # put Z=0 back at the eddy plane, ~3.2 mm into the plate.
@@ -607,11 +631,6 @@ class FFToolchange:
                 " Run TOOL_CALIBRATE_TOOL_OFFSET (or"
                 " FF_IMPORT_FIRMWARE_CONFIG once)"
                 " and SAVE_CONFIG." % ", ".join("T%d" % i for i in missing))
-
-    def _make_tn(self, index):
-        def handler(gcmd):
-            self._toolchange(gcmd, index)
-        return handler
 
     def _run(self, script):
         self.gcode.run_script_from_command(script)
@@ -661,10 +680,10 @@ class FFToolchange:
         """CommMgr::getGrabSensorStatus -- is anything currently grabbed?"""
         return any(self._sensor(n, eventtime) for n in self.grab_sensors)
 
-    # ---------------- runout / clog sensor arming ----------------
+    # ---------------- clog sensor arming ----------------
 
     def _set_sensor_enabled(self, objname, enable):
-        # Both sensor kinds keep their flag in RunoutHelper.sensor_enabled
+        # The flag lives in RunoutHelper.sensor_enabled
         # (filament_switch_sensor.py); set it directly so this also works
         # from klippy:ready, with the gcode command as fallback.
         obj = self.printer.lookup_object(objname, None)
@@ -688,34 +707,29 @@ class FFToolchange:
 
     def _arm_runout(self, tool, reset=True):
         """setFilamentWheelManager(tool, true): every sensor off, then
-        only the mounted tool's on (motion sensor reset first)."""
+        only the mounted tool's on, reset first."""
         if tool < 0 or tool >= EXTRUDER_COUNT:
             self._disarm_runout()
             return
-        for group in (self.runout_switch, self.runout_motion):
-            for i, name in enumerate(group):
-                if i != tool:
-                    self._set_sensor_enabled(name, False)
+        for i, name in enumerate(self.runout_motion):
+            if i != tool:
+                self._set_sensor_enabled(name, False)
         if self.runout_motion:
             if reset:
                 self._reset_motion_sensor(self.runout_motion[tool])
             self._set_sensor_enabled(self.runout_motion[tool], True)
-        if self.runout_switch:
-            self._set_sensor_enabled(self.runout_switch[tool], True)
         self.armed_tool = tool
 
     def _disarm_runout(self):
         """setFilamentWheelManager(_, false): everything off."""
-        for group in (self.runout_switch, self.runout_motion):
-            for name in group:
-                self._set_sensor_enabled(name, False)
+        for name in self.runout_motion:
+            self._set_sensor_enabled(name, False)
         self.armed_tool = -1
 
     def _armed_sensors(self):
-        if self.armed_tool < 0:
+        if self.armed_tool < 0 or not self.runout_motion:
             return []
-        return [g[self.armed_tool] for g in (self.runout_switch,
-                                             self.runout_motion) if g]
+        return [self.runout_motion[self.armed_tool]]
 
     # ---------------- which tool is mounted ----------------
     #
@@ -786,121 +800,6 @@ class FFToolchange:
         toolhead = self.printer.lookup_object('toolhead')
         return toolhead.get_status(self.reactor.monotonic())['max_accel']
 
-    @staticmethod
-    def _parse_axes(raw, error, what):
-        """'xyz' -> 'XYZ', rejecting anything that is not an axis letter."""
-        axes = ''.join(sorted(set(raw.strip().upper())))
-        not_axis_letters = [letter for letter in axes if letter not in 'XYZ']
-        if not_axis_letters:
-            raise error("%s: expected letters from XYZ, got '%s'"
-                        % (what, raw))
-        return axes
-
-    def _restore_axis_arg(self, gcmd):
-        return self._parse_axes(gcmd.get('RESTORE_AXIS', self.restore_axis),
-                                gcmd.error, 'RESTORE_AXIS')
-
-    def _capture_position(self):
-        """The G-code position the change is about to disturb."""
-        gcode_move = self.printer.lookup_object('gcode_move')
-        return list(gcode_move.get_status()['gcode_position'])
-
-    def _travel_protected(self, axes):
-        """Does a change that restores `axes` raise, retract and unretract?"""
-        return (('X' in axes or 'Y' in axes)
-                and (self.restore_z_hop > 0. or self.restore_retract > 0.))
-
-    def _retract_in_dock(self):
-        """Retract the newly locked tool before it leaves its dock.
-
-        The lock macro is synchronous (STEPPER_LOCK ends in M400), so the
-        tool and its electrical contacts are seated when this is called.
-        Relative E is borrowed for the move, and RESTORE_GCODE_STATE keeps
-        the slicer's own E coordinate. Returns the distance retracted.
-        """
-        if self.restore_retract <= 0.:
-            return 0.
-        extruder = self.printer.lookup_object('toolhead').get_extruder()
-        if not extruder.get_status(
-                self.reactor.monotonic())['can_extrude']:
-            self.gcode.respond_info(
-                "ff_toolchange: in-dock retract skipped because the"
-                " mounted tool is below minimum extrusion temperature")
-            return 0.
-        self._run('SAVE_GCODE_STATE NAME=_ff_dock_retract')
-        try:
-            self._run('M83')
-            self._run('G1 E-%.3f F%d'
-                      % (self.restore_retract, self.restore_retract_feed))
-        finally:
-            self._run('RESTORE_GCODE_STATE NAME=_ff_dock_retract')
-        return self.restore_retract
-
-    def _raise_before_docking(self, pos):
-        """Raise the mounted nozzle before it crosses the print to its dock.
-
-        Z stays raised through the release and the grab; _restore_position
-        lowers it once the new tool is back over the target X/Y.
-        """
-        if self.restore_z_hop <= 0.:
-            return
-        self._run('SAVE_GCODE_STATE NAME=_ff_dock_zhop')
-        try:
-            self._run('G90')
-            self._run('G1 Z%.3f F%d'
-                      % (pos[2] + self.restore_z_hop, self.restore_z_feed))
-        finally:
-            self._run('RESTORE_GCODE_STATE NAME=_ff_dock_zhop')
-
-    def _restore_position(self, axes, pos, protected=False,
-                          return_retract=0.):
-        """Put the toolhead back where the change found it.
-
-        A GCODE position is captured and replayed, not a machine one, so it
-        is read back through whatever offsets are in force AFTER the change:
-        the new tool's nozzle goes where the old tool's nozzle was, which is
-        the point of the parameter.
-
-        X/Y first and Z last: descending before the carriage is over the
-        target would drag the nozzle across the part. With `protected` the
-        trip is made restore_z_hop higher, and the Z descent is followed by
-        the unretract of the filament pulled back in the dock.
-
-        Restoring Z after a PARK is the one sharp edge. Parking zeroes the
-        tool offsets, so the same G-code Z is a different machine Z -- by
-        this tool's nozzle-to-eddy-trigger gap (~3.2 mm). Ask for Z on an
-        UNSELECT_TOOL only if you mean it; XY is the safe default.
-        """
-        if not axes:
-            return
-        xy_move = ' '.join('%s%.3f' % (letter, pos[i])
-                           for i, letter in enumerate('XY') if letter in axes)
-        hop = protected and bool(xy_move) and self.restore_z_hop > 0.
-        unretract = (min(return_retract, self.restore_unretract)
-                     if protected and xy_move else 0.)
-        # The sequence has already put the modal state back; borrow it and
-        # return it rather than leaving G90 and the restore feed behind.
-        self._run('SAVE_GCODE_STATE NAME=_ff_restore_axis')
-        try:
-            self._run('G90')
-            if hop:
-                # The new tool's Z frame differs from the old one's, so the
-                # hop is applied again here rather than assumed.
-                self._run('G1 Z%.3f F%d'
-                          % (pos[2] + self.restore_z_hop, self.restore_z_feed))
-            if xy_move:
-                self._run('G1 %s F%d' % (xy_move, self.restore_feed))
-            if hop:
-                self._run('G1 Z%.3f F%d' % (pos[2], self.restore_z_feed))
-            if unretract > 0.:
-                self._run('M83')
-                self._run('G1 E%.3f F%d'
-                          % (unretract, self.restore_unretract_feed))
-            if 'Z' in axes:
-                self._run('G1 Z%.3f F%d' % (pos[2], self.restore_feed))
-        finally:
-            self._run('RESTORE_GCODE_STATE NAME=_ff_restore_axis')
-
     @contextlib.contextmanager
     def _snapshot_motion_state(self):
         """Snapshot the motion state on entry, put it back on exit.
@@ -923,11 +822,19 @@ class FFToolchange:
         absolute, speed = (modal['absolute_coordinates'], modal['speed'])
 
         restore_accel = self.accel_restore or self._current_max_accel()
+        status = self.printer.lookup_object('toolhead').get_status(
+            self.reactor.monotonic())
+        limits = ' SQUARE_CORNER_VELOCITY=%.17g MINIMUM_CRUISE_RATIO=%.17g'
+        restore_limits = limits % (status['square_corner_velocity'],
+                                   status['minimum_cruise_ratio'])
         try:
+            self._run('SET_VELOCITY_LIMIT' + limits % (
+                self.corner_velocity, self.minimum_cruise_ratio))
             yield
         finally:
             self._run(self.stop_macro)
-            self._run('SET_VELOCITY_LIMIT ACCEL=%d' % restore_accel)
+            self._run('SET_VELOCITY_LIMIT ACCEL=%d%s'
+                      % (restore_accel, restore_limits))
 
             if not absolute:
                 self._run('G91')
@@ -949,13 +856,172 @@ class FFToolchange:
 
     # ---------------- grab ----------------
 
-    def _grab(self, tool, retract_in_dock=False):
-        """Port of CommMgr::doGrabExtruderLatest @0x7a8190.
+    def _move_to_dock_y(self, dock_y):
+        # Called with the tool frame suspended, so these are machine XY.
+        # The segment between two X<=x_safe endpoints stays in the clear
+        # half-plane. Starting outside it requires an X-only retreat first.
+        position = self.printer.lookup_object('toolhead').get_position()
+        r = self.corner_radius
+        dy = dock_y - position[1]
+        if r > 0. and abs(dy) >= r and position[0] <= self.x_safe:
+            # Arrive in the lane already heading +X: run in Y at
+            # x_safe - r, then a quarter arc centred on (x_safe, dock_y -+ r)
+            # ends at (x_safe, dock_y). The whole path stays at X <= x_safe.
+            side = 1. if dy > 0. else -1.
+            self._run('G1 X%.3f Y%.3f F%d'
+                      % (self.x_safe - r, dock_y - side * r, self.fast_feed))
+            self._run('%s X%.3f Y%.3f I%.3f J0'
+                      % ('G2' if side > 0. else 'G3', self.x_safe, dock_y, r))
+        elif position[0] <= self.x_safe:
+            self._run('G1 X%.3f Y%.3f F%d'
+                      % (self.x_safe, dock_y, self.fast_feed))
+        else:
+            self._run('G1 X%.3f F%d' % (self.x_safe, self.fast_feed))
+            self._run('G1 Y%.3f' % dock_y)
 
-        Returns the filament retracted in the dock, which is owed back when
-        the tool reaches its restored position."""
+    def _seating_ease_distance(self):
+        # Start braking early enough to stop at contact_accel without a
+        # high-acceleration speed drop inside the rubber.
+        return max(self.ease_distance,
+                   self.contact_speed ** 2 / (2. * self.contact_accel))
+
+    def _contact_exit(self, dock_x):
+        exit_x = dock_x - self.contact_depth - self.contact_margin
+        if exit_x <= self.x_safe:
+            raise FFToolchangeError('Rubber contact region overlaps the dock clearance corridor')
+        if dock_x - self._seating_ease_distance() <= self.x_safe:
+            raise FFToolchangeError('Gentle braking region overlaps the dock clearance corridor')
+        return exit_x
+
+    @contextlib.contextmanager
+    def _contact_profile(self):
+        th = self.printer.lookup_object('toolhead')
+        ratio = th.get_status(self.reactor.monotonic())['minimum_cruise_ratio']
+        try:
+            # Pure acceleration/deceleration sections must not be reshaped
+            # into short cruise plateaus by minimum_cruise_ratio.
+            self._run('SET_VELOCITY_LIMIT MINIMUM_CRUISE_RATIO=0')
+            yield
+        finally:
+            self._run('SET_VELOCITY_LIMIT ACCEL=%d MINIMUM_CRUISE_RATIO=%.17g'
+                      % (self.accel_move, ratio))
+
+    def _soft_seat(self, dock_x, on_brake=None):
+        th = self.printer.lookup_object('toolhead')
+        ease_x = dock_x - self._seating_ease_distance()
+        exit_x = min(self._contact_exit(dock_x), ease_x)
+        with self._contact_profile():
+            current_x = th.get_position()[0]
+            if current_x > exit_x:
+                # Retry starts at the seated position: back out gently.
+                self._run('SET_VELOCITY_LIMIT ACCEL=%.3f' % self.contact_accel)
+                self._run('G1 X%.6f F%.3f' % (exit_x, self.withdrawal_speed * 60.))
+                current_x = exit_x
+            if current_x < exit_x - 1e-6:
+                self._run('SET_VELOCITY_LIMIT ACCEL=%d' % self.accel_move)
+                self._run('G1 X%.6f F%d' % (exit_x, self.fast_feed))
+            if exit_x < ease_x - 1e-6:
+                self._run('SET_VELOCITY_LIMIT ACCEL=%d' % self.accel_move)
+                self._run('G1 X%.6f F%.3f' %
+                          (ease_x, self.contact_speed * 60.))
+            self._run('SET_VELOCITY_LIMIT ACCEL=%.3f' % self.contact_accel)
+            if on_brake is not None:
+                th.register_lookahead_callback(on_brake)
+            # Keep the contact speed through the ease boundary. Only the
+            # acceleration limit changes; braking stops us at the endpoint.
+            self._run('G1 X%.6f F%.3f' % (dock_x, self.contact_speed * 60.))
+            self._wait_moves()
+
+    def _fast_withdraw(self, target_x):
+        # Leaving a dock empty: after a successful unlock, or a pickup
+        # attempt that never actuated the lock. Failed unlock never comes here.
+        self._run('SET_VELOCITY_LIMIT ACCEL=%d' % self.accel_move)
+        self._run('G1 X%.6f F%d' % (target_x, self.fast_feed))
+
+    def _carried_withdraw(self, dock_x, target_x):
+        # A picked tool leaves the rubber in one gentle move, then travels.
+        # Nothing between the two flushes the lookahead, so the gentle move
+        # hands over to the fast one without stopping.
+        exit_x = self._contact_exit(dock_x)
+        with self._contact_profile():
+            self._run('SET_VELOCITY_LIMIT ACCEL=%.3f' % self.contact_accel)
+            self._run('G1 X%.6f F%.3f' % (exit_x, self.withdrawal_speed * 60.))
+            self._run('SET_VELOCITY_LIMIT ACCEL=%d' % self.accel_move)
+            self._run('G1 X%.6f F%d' % (target_x, self.fast_feed))
+
+    def _afc_will_restore(self):
+        """Is this change one AFC saved a position for and will move back
+        from? Only then is an in-dock retract given back at the target."""
+        afc = self.printer.lookup_object('AFC', None)
+        return (afc is not None and getattr(afc, 'in_toolchange', False)
+                and getattr(afc, 'position_saved', False))
+
+    def _hook_afc_restore(self):
+        """Give the in-dock retract back right after AFC's restore_pos.
+
+        AFC moves the head back over the print at the end of CHANGE_TOOL and
+        offers no macro after that move, so its bound method is wrapped on
+        the instance. Without AFC, or with dock_retract 0, nothing is
+        wrapped and nothing changes."""
+        afc = self.printer.lookup_object('AFC', None)
+        if afc is None or self.dock_retract <= 0.:
+            return
+        original = getattr(afc, 'restore_pos', None)
+        if original is None or getattr(original, '_ff_dock_unretract', False):
+            return
+
+        def restore_pos(*args, **kwargs):
+            try:
+                result = original(*args, **kwargs)
+            except Exception:
+                # The head is not where the filament was owed; drop it.
+                self.pending_unretract = 0.
+                raise
+            self._unretract_at_target()
+            return result
+        restore_pos._ff_dock_unretract = True
+        afc.restore_pos = restore_pos
+
+    def _retract_in_dock(self, tool):
+        """Retract the newly locked head before it leaves its dock.
+
+        The lock macro is synchronous (STEPPER_LOCK ends in M400), so the
+        head is seated when this is called. Relative E is borrowed for the
+        move, and RESTORE_GCODE_STATE keeps the slicer's own E coordinate."""
+        if self.dock_retract <= 0. or not self._afc_will_restore():
+            return
+        self._run('ACTIVATE_EXTRUDER EXTRUDER=%s' % self._extruder_name(tool))
+        extruder = self.printer.lookup_object('toolhead').get_extruder()
+        if not extruder.get_status(self.reactor.monotonic())['can_extrude']:
+            self.gcode.respond_info(
+                "ff_toolchange: in-dock retract skipped because T%d is"
+                " below minimum extrusion temperature" % tool)
+            return
+        self._run('SAVE_GCODE_STATE NAME=_ff_dock_retract')
+        try:
+            self._run('M83')
+            self._run('G1 E-%.3f F%d'
+                      % (self.dock_retract, self.dock_retract_feed))
+        finally:
+            self._run('RESTORE_GCODE_STATE NAME=_ff_dock_retract')
+        self.pending_unretract = self.dock_retract
+
+    def _unretract_at_target(self):
+        owed, self.pending_unretract = self.pending_unretract, 0.
+        amount = min(owed, self.dock_unretract)
+        if amount <= 0.:
+            return
+        self._run('SAVE_GCODE_STATE NAME=_ff_dock_unretract')
+        try:
+            self._run('M83')
+            self._run('G1 E%.3f F%d' % (amount, self.dock_unretract_feed))
+        finally:
+            self._run('RESTORE_GCODE_STATE NAME=_ff_dock_unretract')
+
+    def _grab(self, tool):
+        """Port of CommMgr::doGrabExtruderLatest @0x7a8190."""
         dock_x, dock_y = self._dock(tool)
-        return_retract = 0.
+        self._contact_exit(dock_x)
 
         # Precheck: the target must be detected in its dock (20 x 50 ms).
         # No motion at all on failure.
@@ -973,18 +1039,16 @@ class FFToolchange:
             # which is the truth -- nothing is mounted.
             self._set_tool_frame(None)
             self._run('G90')
-            self._run('G1 X%.3f F%d' % (self.x_safe, self.fast_feed))
-            self._run('G1 Y%.3f' % dock_y)
-            self._run('G1 X%.3f' % self.x_approach)
+            self._move_to_dock_y(dock_y)
 
             # Up to 3 attempts; within each, poll up to 1 s for the grab
             # sensor before energising the motor.
             for attempt in range(GRAB_ATTEMPTS):
                 # Re-engage the dock at the top of EVERY attempt, as the app
-                # does, so the back-off to x_approach is undone before the
-                # next round of polling. Without it, attempts 2 and 3 poll
-                # from the backed-off position and can never mate.
-                self._run('G1 X%.3f F%d' % (dock_x, self.slow_feed))
+                # does, so the back-off is undone before the next round of
+                # polling. Without it, attempts 2 and 3 poll from the
+                # backed-off position and can never mate.
+                self._soft_seat(dock_x)
                 self._wait_moves()
 
                 # the app sleeps before its first poll
@@ -993,17 +1057,14 @@ class FFToolchange:
 
                 if self._poll_until(self._grab_sensor, SEAT_TIMEOUT):
                     self._run(self.grab_macro)
-                    if retract_in_dock:
-                        # Select this tool's heater and motion queue before
-                        # touching E, and retract before the pullback can
-                        # draw an ooze string out of the dock.
-                        self._run('ACTIVATE_EXTRUDER EXTRUDER=%s'
-                                  % self._extruder_name(tool))
-                        return_retract = self._retract_in_dock()
-                    # The pullback feed is the app's literal F4800
-                    # (@0x7a9074), NOT the calibrated slow feed.
-                    self._run('G1 X%.3f F%d'
-                              % (dock_x - self.grab_pullback, PULLBACK_FEED))
+                    # Seated and locked: the one moment the new head can
+                    # retract without drawing a string out of the dock.
+                    self._retract_in_dock(tool)
+                    # Both lock steps run at the dock. The app pulls back
+                    # 20 mm between them, but grab2's MANUAL_STEPPER flushes
+                    # the lookahead, so that pullback stopped dead between
+                    # two exit moves. SYNC=0 lets the lock finish during the
+                    # exit instead.
                     self._run(self.grab2_macro)
                     break
 
@@ -1011,7 +1072,7 @@ class FFToolchange:
                              " failed, backing off",
                              attempt + 1, GRAB_ATTEMPTS, tool)
 
-                self._run('G1 X%.3f' % self.x_approach)
+                self._fast_withdraw(self._contact_exit(dock_x))
                 self._wait_moves()
                 self._sleep(BACKOFF_WAIT)
 
@@ -1020,7 +1081,7 @@ class FFToolchange:
                     "grab sensor never activated for T%d after %d attempts"
                     % (tool, GRAB_ATTEMPTS))
 
-            self._run('G1 X%.3f F%d' % (self.x_safe, self.grab_retreat_feed))
+            self._carried_withdraw(dock_x, self.x_safe)
             self._wait_moves()
 
             # Verify: the tool must have LEFT its dock and the grab sensor
@@ -1046,7 +1107,6 @@ class FFToolchange:
             # sensors become the live ones (the app does this 3 s later
             # from a thread; here the grab moves are already complete).
             self._arm_runout(tool)
-            return return_retract
 
     # ---------------- release ----------------
 
@@ -1067,6 +1127,7 @@ class FFToolchange:
         counter); we stop at three rather than energise the motor with no one
         watching."""
         dock_x, dock_y = self._dock(tool)
+        self._contact_exit(dock_x)
 
         # Sensors off first (changeExtruderChannel @0x79750c disarms before
         # the head swap): nothing the carriage does at the dock may fire a
@@ -1090,29 +1151,33 @@ class FFToolchange:
             # which is the truth -- nothing is mounted.
             self._set_tool_frame(None)
             self._run('G90')
-            # Release approach: X250 then dock Y, once, outside the retry
-            # loop. There is NO X280 stage here -- that is grab-only; the
-            # release staging point is dockX-10 below.
-            self._run('G1 X%.3f F%d' % (self.x_safe, self.fast_feed))
-            self._run('G1 Y%.3f' % dock_y)
+            # Release approach to safe X / dock Y, once, outside the retry
+            # loop.
+            self._move_to_dock_y(dock_y)
 
             for attempt in range(RELEASE_ATTEMPTS):
-                # The app emits G1 X<dock-10> with NO F (inheriting the
-                # modal feed: fast on attempt 1, the slow feed on retries)
-                # and the final mate at the release slow feed.
-                self._run('G1 X%.3f' % (dock_x - RELEASE_STAGE_BACKOFF))
-                self._run('G1 X%.3f F%d' % (dock_x, self.release_slow_feed))
+                callback = (self.release_overlap.overlap_prepare(tool)
+                            if self.release_overlap is not None else None)
+                self._soft_seat(dock_x, on_brake=callback)
                 self._wait_moves()
 
-                # Unlock only once the dock sensor confirms the tool has
-                # seated -- releasing early drops the tool on the floor.
+                # Endpoint confirmation remains mandatory before retreat.
+                # The optional file-output experiment starts on supported rail.
                 if not self._poll_until(lambda: self._in_location(tool),
                                         SEAT_TIMEOUT):
+                    if self.release_overlap is not None:
+                        self.release_overlap.overlap_abort(tool)
+                        raise FFToolchangeError(
+                            'T%d release failed: missing endpoint seating confirmation' % tool)
                     logging.info(
                         "ff_toolchange: release attempt %d/%d for T%d: tool"
                         " never read as seated, re-approaching",
                         attempt + 1, RELEASE_ATTEMPTS, tool)
                     continue
+
+                if self.release_overlap is not None:
+                    self.release_overlap.overlap_finish(tool)
+                    break
 
                 for _ in range(RELEASE_RETRIES):
                     try:
@@ -1141,8 +1206,7 @@ class FFToolchange:
             # Retreat happens only on success; on failure the app leaves the
             # carriage at the dock (and so do we -- the finally-clause only
             # de-energises and restores limits, it does not move).
-            self._run('G1 X%.3f F%d'
-                      % (self.x_safe, self.release_retreat_feed))
+            self._fast_withdraw(self.x_safe)
             self._wait_moves()
 
             # Verify: tool in its dock AND nothing held.
@@ -1159,26 +1223,14 @@ class FFToolchange:
 
     # ---------------- commands ----------------
 
-    cmd_TOOLCHANGE_help = "Change to tool INDEX=0..3"
-
-    def cmd_TOOLCHANGE(self, gcmd):
-        self._toolchange(gcmd, gcmd.get_int('INDEX'))
-
     def _toolchange(self, gcmd, tool):
-        if tool < 0 or tool >= EXTRUDER_COUNT:
-            raise gcmd.error("TOOLCHANGE: INDEX must be 0..%d, got %d"
-                             % (EXTRUDER_COUNT - 1, tool))
-        # Resolved here rather than per command, so T<n> and TOOLCHANGE --
-        # which is what a file actually issues -- honour RESTORE_AXIS and the
-        # [ff_toolchange] restore_axis default the same way SELECT_TOOL does.
-        restore_axis = self._restore_axis_arg(gcmd)
-        # Captured before anything moves; replayed only if the change
-        # succeeded, since a half-finished sequence has no position worth
-        # returning to.
-        resume = self._capture_position() if restore_axis else None
-        protected = self._travel_protected(restore_axis)
-        return_retract = 0.
+        # No position is put back here. AFC saves the toolhead position
+        # before every change it makes and restores it after, and a file's
+        # own moves after a T<n> place the head anyway.
         self.changing = True
+        # A retract owed by an earlier change that AFC never moved back from
+        # is dropped, not given back somewhere unrelated.
+        self.pending_unretract = 0.
         try:
             self._wait_moves()
             self._ensure_homed()
@@ -1188,17 +1240,16 @@ class FFToolchange:
             current, _ = self._derive_current_tool()
             if current != tool:
                 if current >= 0:
-                    if protected:
-                        self._raise_before_docking(resume)
                     self._release(current)
                 # _grab activates the extruder and applies the tool offsets,
                 # as the app does inside doGrabExtruderLatest.
-                return_retract = self._grab(tool, retract_in_dock=protected)
+                self._grab(tool)
             else:
                 # Same tool re-selected: still re-activate and re-apply, so
-                # the first Tn after a RESTART (which wiped the gcode
-                # offsets) does not leave the mounted tool offset-less. Both
-                # calls are idempotent.
+                # the first selection after a RESTART, or after an aborted
+                # change that left the frame off, does not leave the mounted
+                # tool offset-less. Both calls are idempotent and nothing
+                # moves -- SELECT_TOOL on the mounted head is the recovery.
                 self._run('ACTIVATE_EXTRUDER EXTRUDER=%s'
                           % self._extruder_name(tool))
                 self._set_tool_frame(tool)
@@ -1207,13 +1258,6 @@ class FFToolchange:
             # so it could rewrite bare M104/M109 and SET_PRESSURE_ADVANCE per
             # channel. Upstream needs none: both apply to the ACTIVE extruder,
             # which _grab has just set to this tool.
-            if resume is not None:
-                # Re-selecting the mounted tool crossed nothing and retracted
-                # nothing, so it keeps the plain X/Y-first return.
-                self._restore_position(
-                    restore_axis, resume,
-                    protected=protected and current != tool,
-                    return_retract=return_retract)
         except FFToolchangeError as err:
             raise gcmd.error(str(err))
         except self.printer.command_error:
@@ -1223,8 +1267,8 @@ class FFToolchange:
             # operator before they resume anything.
             self.gcode.respond_info(
                 "ff_toolchange: toolchange aborted mid-sequence; gcode"
-                " offsets may be zeroed. Run TOOLCHANGE_STATUS, then T<n>"
-                " again before resuming a print.")
+                " offsets may be zeroed. Run TOOLCHANGE_STATUS, then"
+                " SELECT_TOOL T=<n> again before resuming a print.")
             raise
         finally:
             self.changing = False
@@ -1457,15 +1501,13 @@ class FFToolchange:
             raise gcmd.error("T must be 0..%d" % (EXTRUDER_COUNT - 1))
         return tool
 
-    cmd_SELECT_TOOL_help = ("Select a tool (T=<n> | TOOL=T<n>); same as"
-                            " T<n>. RESTORE_AXIS=<xyz> returns the toolhead")
+    cmd_SELECT_TOOL_help = ("Grab a head by its physical number (T=<n> |"
+                            " TOOL=T<n>); T<n> is AFC's, through its map")
 
     def cmd_SELECT_TOOL(self, gcmd):
         self._toolchange(gcmd, self._tool_arg(gcmd))
 
-    cmd_UNSELECT_TOOL_help = ("Dock the mounted tool; same as"
-                              " TOOLCHANGE_PARK. RESTORE_AXIS=<xyz> returns"
-                              " the toolhead")
+    cmd_UNSELECT_TOOL_help = "Dock the mounted tool; same as TOOLCHANGE_PARK"
 
     def cmd_UNSELECT_TOOL(self, gcmd):
         tool = self._tool_arg(gcmd, required=False)
@@ -1476,100 +1518,8 @@ class FFToolchange:
                                  " (current %s)" % (tool, mounted))
         self.cmd_TOOLCHANGE_PARK(gcmd)
 
-    cmd_INITIALIZE_TOOLCHANGER_help = (
-        "Re-derive toolchanger state from the dock sensors (no motion)")
-
-    def cmd_INITIALIZE_TOOLCHANGER(self, gcmd):
-        """Re-derive the state, and re-apply the frame that goes with it.
-
-        Upstream's re-applies too, and here it is the only way back: an
-        aborted toolchange leaves the frame off with a tool still on the
-        carriage, and a bare G1 Z0 then aims ~3.2 mm into the plate.
-        Nothing moves and no dock is touched, so it is safe to type when
-        the machine is in an unknown state -- which is when it is typed."""
-        self._wait_moves()
-        mounted, reason = self._current_tool_or_none()
-        if mounted is None:
-            raise gcmd.error("toolchanger state not derivable: %s" % reason)
-        before = self.gcode_transform.tool
-        self.restore_tool_frame()
-        after = self.gcode_transform.tool
-        frame = ("T%d" % after) if after is not None else "none (bare"\
-            " carriage)"
-        gcmd.respond_info("toolchanger ready, tool_number=%d (%s); frame %s%s"
-                          % (mounted, reason, frame,
-                             "" if before == after else " -- re-applied"))
-
-    cmd_ASSIGN_TOOL_help = "Not supported on this toolchanger"
-
-    def cmd_ASSIGN_TOOL(self, gcmd):
-        raise gcmd.error(
-            "ASSIGN_TOOL: logical-to-physical tool remapping is not supported"
-            " here; remap in the slicer (the fork's"
-            " SDCARD_SET_GCODE_EX_USED_BASE table is the future home)")
-
-    cmd_SET_TOOL_TEMPERATURE_help = (
-        "Set a tool's hotend target (T=<n> | TOOL=T<n>, default the mounted"
-        " tool); TARGET=<temp> [WAIT=1]")
-
-    def cmd_SET_TOOL_TEMPERATURE(self, gcmd):
-        """Upstream addresses a tool by name; we address the extruder behind
-        it. Naming the tool rather than the extruder is the whole point --
-        a UI knows it is heating T2, not that T2 means [extruder2]."""
-        tool = self._tool_arg(gcmd, required=False)
-        if tool is None:
-            tool, reason = self._current_tool_or_none()
-            if tool is None or tool < 0:
-                raise gcmd.error("SET_TOOL_TEMPERATURE: no tool mounted, so"
-                                 " T=<n> or TOOL=T<n> is required (%s)"
-                                 % reason)
-        target = gcmd.get_float('TARGET', 0.)
-        heater = self._extruder_name(tool)
-        self._run('SET_HEATER_TEMPERATURE HEATER=%s TARGET=%.1f'
-                  % (heater, target))
-        # WAIT only waits for heat-UP, like Klipper's own TEMPERATURE_WAIT
-        # MINIMUM: there is nothing to wait for on the way down, and a
-        # TARGET of 0 would never be reached.
-        if gcmd.get_int('WAIT', 0) and target > 0.:
-            self._run('TEMPERATURE_WAIT SENSOR=%s MINIMUM=%.1f'
-                      % (heater, target))
-
-    cmd_VERIFY_TOOL_DETECTED_help = (
-        "Check the sensors agree with the expected tool (T=<n> | TOOL=T<n>,"
-        " default: just that the state is readable)")
-
-    def cmd_VERIFY_TOOL_DETECTED(self, gcmd):
-        """ASYNC is accepted and ignored. Upstream defers the check into the
-        motion queue; ours reads switches after a wait_moves, which costs
-        nothing to do inline."""
-        gcmd.get_int('ASYNC', 0)
-        expect = self._tool_arg(gcmd, required=False)
-        self._wait_moves()
-        mounted, reason = self._current_tool_or_none()
-        if mounted is None:
-            raise gcmd.error("VERIFY_TOOL_DETECTED: toolchanger state not"
-                             " derivable: %s" % reason)
-        if expect is not None and mounted != expect:
-            raise gcmd.error("VERIFY_TOOL_DETECTED: expected T%d, sensors say"
-                             " %s (%s)"
-                             % (expect,
-                                'T%d' % mounted if mounted >= 0
-                                else 'no tool', reason))
-        gcmd.respond_info("detected %s (%s)"
-                          % ('T%d' % mounted if mounted >= 0 else 'no tool',
-                             reason))
-
-    cmd_SELECT_TOOL_ERROR_help = "Abort the running script: a tool change failed"
-
-    def cmd_SELECT_TOOL_ERROR(self, gcmd):
-        """Upstream latches the changer into its error state and hands off to
-        an on_tool_change_error script. We hold no latch -- status is derived
-        from the sensors every time it is asked for -- so the useful half is
-        stopping the script that called this."""
-        raise gcmd.error(gcmd.get('MESSAGE', 'tool change failed'))
-
-    cmd_FF_RUNOUT_ARM_help = ("Enable the mounted tool's runout/clog sensors"
-                              " (and disable the others); TOOL= overrides")
+    cmd_FF_RUNOUT_ARM_help = ("Enable the mounted tool's clog sensor (and"
+                              " disable the others); TOOL= overrides")
 
     def cmd_FF_RUNOUT_ARM(self, gcmd):
         tool = gcmd.get_int('TOOL', -1)
@@ -1581,18 +1531,18 @@ class FFToolchange:
         elif tool >= EXTRUDER_COUNT:
             raise gcmd.error("FF_RUNOUT_ARM: TOOL must be 0..%d"
                              % (EXTRUDER_COUNT - 1))
-        if not (self.runout_switch or self.runout_motion):
-            gcmd.respond_info("FF_RUNOUT_ARM: no runout sensors configured")
+        if not self.runout_motion:
+            gcmd.respond_info("FF_RUNOUT_ARM: no clog sensors configured")
             return
         self._arm_runout(tool)
-        gcmd.respond_info("runout sensors armed for T%d: %s"
+        gcmd.respond_info("clog sensor armed for T%d: %s"
                           % (tool, ", ".join(self._armed_sensors())))
 
-    cmd_FF_RUNOUT_DISARM_help = "Disable every runout/clog sensor"
+    cmd_FF_RUNOUT_DISARM_help = "Disable every clog sensor"
 
     def cmd_FF_RUNOUT_DISARM(self, gcmd):
         self._disarm_runout()
-        gcmd.respond_info("runout sensors disarmed")
+        gcmd.respond_info("clog sensors disarmed")
 
     cmd_TOOLCHANGE_STATUS_help = "Report toolchanger sensor state"
 
@@ -1608,19 +1558,18 @@ class FFToolchange:
         if applied is None:
             lines.append("  frame applied: NONE -- raw machine coordinates."
                          " Z=0 is the station plane, ~3.2 mm BELOW the bed;"
-                         " run T%s to re-apply%s"
+                         " run SELECT_TOOL T=%s to re-apply%s"
                          % ("<n>" if tool is None or tool < 0 else "%d" % tool,
                             "" if tool is None or tool < 0
-                            else " (INITIALIZE_TOOLCHANGER does it without"
-                                 " touching the docks)"))
+                            else " (nothing moves: it is already mounted)"))
         else:
             lines.append("  frame applied: T%d  (X %+.4f, Y %+.4f, Z %+.4f,"
                          " job Z %+.3f)"
                          % (applied, self.offset_x[applied],
                             self.offset_y[applied], self.offset_z[applied],
                             self.job_z))
-        if self.runout_switch or self.runout_motion:
-            lines.append("  runout sensors armed: %s"
+        if self.runout_motion:
+            lines.append("  clog sensor armed: %s"
                          % (", ".join(self._armed_sensors()) or "none"))
         for i, sensor in enumerate(self.dock_sensors):
             try:
@@ -1674,16 +1623,13 @@ class FFToolchange:
         lines.append("  offset_base   T%d" % self.offset_base)
         lines.append("  x_correction  %.4f" % self.x_correction)
         lines.append("  fast_feed     %d" % self.fast_feed)
-        lines.append("  slow_feed     %d" % self.slow_feed)
-        lines.append("  release_slow_feed %d" % self.release_slow_feed)
+        lines.append("  accel_move    %d" % self.accel_move)
         lines.append("  temp_offset   %.6f" % self.temp_offset)
         gcmd.respond_info("\n".join(lines))
 
     cmd_TOOLCHANGE_PARK_help = "Dock whatever tool is currently mounted"
 
     def cmd_TOOLCHANGE_PARK(self, gcmd):
-        restore_axis = self._restore_axis_arg(gcmd)
-        resume = self._capture_position() if restore_axis else None
         try:
             self._wait_moves()
             current, reason = self._derive_current_tool()
@@ -1707,8 +1653,6 @@ class FFToolchange:
                 gcmd.respond_info("TOOLCHANGE_PARK: cleared active bed mesh"
                                   " because Z is unhomed")
             self._release(current)
-            if resume is not None:
-                self._restore_position(restore_axis, resume)
         except FFToolchangeError as err:
             raise gcmd.error(str(err))
         finally:
@@ -1740,8 +1684,8 @@ class FFToolchange:
                 # docked or is the mounted one (_FF_PREFLIGHT).
                 'docked_tools': [i for i in range(EXTRUDER_COUNT)
                                  if self._in_location(i, eventtime)],
-                # Tool whose runout/clog sensors are enabled (-1 = none)
-                # and those sensors' object names.
+                # Tool whose clog sensor is enabled (-1 = none) and that
+                # sensor's object name.
                 'runout_armed': self.armed_tool,
                 'runout_sensors': self._armed_sensors()}
 

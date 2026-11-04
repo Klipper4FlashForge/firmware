@@ -1,9 +1,12 @@
-"""The trip across the part during a tool change: hop, in-dock retract, unretract.
+"""The trip back to the print after a tool change, under AFC.
 
-These run the real _toolchange, _restore_position, _retract_in_dock and
-_raise_before_docking. The dock mechanics (_release, _grab's lock dance) are
-substituted, so they do not validate motion on a printer; they pin the order
-of the commands and which changes are left exactly as they were.
+AFC owns the move back ([AFC] z_hop lifts and travels high; restore_pos puts
+the head back). ff_toolchange adds the in-dock retract: the new head pulls
+filament back while still seated, and gives part of it back right after
+AFC's restore_pos. These run the real _retract_in_dock, _hook_afc_restore,
+_unretract_at_target and _toolchange against a stand-in AFC; the dock
+mechanics are substituted, so they pin the order of commands, not motion on
+a printer.
 """
 import importlib.util
 from types import SimpleNamespace
@@ -16,7 +19,12 @@ pytestmark = pytest.mark.static
 
 MODULE = (ROOT / "pkgs" / "klipper" / "payload" / "klipper" / "klippy" /
           "extras" / "ff_toolchange.py")
-POS = [100., 50., 3.2, 0.]
+
+RETRACT = ["ACTIVATE_EXTRUDER EXTRUDER=extruder2",
+           "SAVE_GCODE_STATE NAME=_ff_dock_retract", "M83",
+           "G1 E-0.400 F1800", "RESTORE_GCODE_STATE NAME=_ff_dock_retract"]
+UNRETRACT = ["SAVE_GCODE_STATE NAME=_ff_dock_unretract", "M83",
+             "G1 E0.300 F200", "RESTORE_GCODE_STATE NAME=_ff_dock_unretract"]
 
 
 class CommandError(Exception):
@@ -31,6 +39,21 @@ class Extruder:
         return {"can_extrude": self.can_extrude}
 
 
+class FakeAFC:
+    """The two flags and the one method ff_toolchange relies on."""
+
+    def __init__(self, log):
+        self.log = log
+        self.in_toolchange = True
+        self.position_saved = True
+        self.fail = False
+
+    def restore_pos(self, move_z_first=True):
+        if self.fail:
+            raise CommandError("restore failed")
+        self.log.append("AFC restore_pos")
+
+
 @pytest.fixture
 def travel(monkeypatch):
     spec = importlib.util.spec_from_file_location("anvil_ff_toolchange", MODULE)
@@ -39,22 +62,27 @@ def travel(monkeypatch):
     tc = module.FFToolchange.__new__(module.FFToolchange)
     tc.log = []
     tc.changing = False
-    tc.restore_axis = "xy"
-    tc.restore_feed = 9000
-    tc.restore_z_hop = 2.0
-    tc.restore_z_feed = 1200
-    tc.restore_retract = 0.4
-    tc.restore_retract_feed = 1800
-    tc.restore_unretract = 0.3
-    tc.restore_unretract_feed = 200
+    tc.dock_retract = 0.4
+    tc.dock_retract_feed = 1800
+    tc.dock_unretract = 0.3
+    tc.dock_unretract_feed = 200
+    tc.pending_unretract = 0.
     tc.extruder = Extruder()
+    tc.afc = FakeAFC(tc.log)
     tc.mounted = 0
     tc.gcode = SimpleNamespace(respond_info=tc.log.append)
     tc.reactor = SimpleNamespace(monotonic=lambda: 0.)
-    tc.printer = SimpleNamespace(
-        command_error=CommandError,
-        lookup_object=lambda name, default=None: SimpleNamespace(
-            get_extruder=lambda: tc.extruder))
+    toolhead = SimpleNamespace(get_extruder=lambda: tc.extruder)
+
+    def lookup_object(name, default=None):
+        if name == "AFC":
+            return tc.afc
+        if name == "toolhead":
+            return toolhead
+        return default
+
+    tc.printer = SimpleNamespace(command_error=CommandError,
+                                 lookup_object=lookup_object)
     tc.tools = [SimpleNamespace(
         extruder_name="extruder" if i == 0 else "extruder%d" % i)
         for i in range(4)]
@@ -62,7 +90,6 @@ def travel(monkeypatch):
     monkeypatch.setattr(tc, "_run", lambda script: tc.log.append(script))
     monkeypatch.setattr(tc, "_wait_moves", lambda: None)
     monkeypatch.setattr(tc, "_ensure_homed", lambda *a: None)
-    monkeypatch.setattr(tc, "_capture_position", lambda: list(POS))
     monkeypatch.setattr(tc, "_derive_current_tool",
                         lambda: (tc.mounted, "sensors"))
     monkeypatch.setattr(tc, "_set_tool_frame", lambda tool: None)
@@ -70,9 +97,11 @@ def travel(monkeypatch):
     monkeypatch.setattr(tc, "_release",
                         lambda tool: tc.log.append("release T%d" % tool))
 
-    def grab(tool, retract_in_dock=False):
-        tc.log.append("grab T%d in_dock=%s" % (tool, retract_in_dock))
-        return tc._retract_in_dock() if retract_in_dock else 0.
+    def grab(tool):
+        # The real _grab calls this between the lock and the withdraw.
+        tc.log.append("lock T%d" % tool)
+        tc._retract_in_dock(tool)
+        tc.log.append("withdraw T%d" % tool)
 
     monkeypatch.setattr(tc, "_grab", grab)
     gcmd = SimpleNamespace(get=lambda name, default=None: default,
@@ -80,133 +109,95 @@ def travel(monkeypatch):
     return tc, gcmd
 
 
-def change(tc, gcmd, tool=2):
+def afc_change(tc, gcmd, tool=2):
+    """What AFC's CHANGE_TOOL does around our SELECT_TOOL."""
+    tc._hook_afc_restore()
     tc._toolchange(gcmd, tool)
+    tc.afc.restore_pos()
     return tc.log
 
 
-def test_nothing_set_leaves_the_change_exactly_as_it_was(travel):
-    tc, gcmd = travel
-    tc.restore_z_hop = tc.restore_retract = 0.
-    tc.restore_unretract = 0.
-
-    assert change(tc, gcmd) == [
-        "release T0", "grab T2 in_dock=False",
-        "SAVE_GCODE_STATE NAME=_ff_restore_axis", "G90",
-        "G1 X100.000 Y50.000 F9000",
-        "RESTORE_GCODE_STATE NAME=_ff_restore_axis"]
-
-
-def test_a_protected_change_raises_retracts_travels_lowers_and_unretracts(travel):
+def test_a_change_retracts_in_the_dock_and_gives_back_after_afcs_restore(travel):
     tc, gcmd = travel
 
-    assert change(tc, gcmd) == [
-        # the old tool rises before it crosses the part to its dock
-        "SAVE_GCODE_STATE NAME=_ff_dock_zhop", "G90", "G1 Z5.200 F1200",
-        "RESTORE_GCODE_STATE NAME=_ff_dock_zhop",
-        "release T0",
-        # the new tool pulls filament back while it is still seated
-        "grab T2 in_dock=True",
-        "SAVE_GCODE_STATE NAME=_ff_dock_retract", "M83", "G1 E-0.400 F1800",
-        "RESTORE_GCODE_STATE NAME=_ff_dock_retract",
-        # travel high, descend, give back part of it
-        "SAVE_GCODE_STATE NAME=_ff_restore_axis", "G90",
-        "G1 Z5.200 F1200", "G1 X100.000 Y50.000 F9000", "G1 Z3.200 F1200",
-        "M83", "G1 E0.300 F200",
-        "RESTORE_GCODE_STATE NAME=_ff_restore_axis"]
+    assert afc_change(tc, gcmd) == (
+        ["release T0", "lock T2"] + RETRACT + ["withdraw T2",
+         "AFC restore_pos"] + UNRETRACT)
+    assert tc.pending_unretract == 0.
 
 
-def test_the_unretract_never_exceeds_what_was_retracted(travel, monkeypatch):
+def test_nothing_set_leaves_the_change_and_afc_untouched(travel):
     tc, gcmd = travel
-    tc.restore_unretract = 0.4
-    monkeypatch.setattr(tc, "_retract_in_dock", lambda: 0.1)
+    tc.dock_retract = tc.dock_unretract = 0.
+    original = tc.afc.restore_pos
 
-    log = change(tc, gcmd)
+    assert afc_change(tc, gcmd) == [
+        "release T0", "lock T2", "withdraw T2", "AFC restore_pos"]
+    assert tc.afc.restore_pos == original
 
-    assert "G1 E0.100 F200" in log
 
-
-def test_a_hop_alone_does_not_touch_the_filament(travel):
+def test_no_retract_for_a_change_afc_will_not_move_back_from(travel):
+    """A SELECT_TOOL from the console, or a change before AFC saved a
+    position: nothing would give the filament back at a target."""
     tc, gcmd = travel
-    tc.restore_retract = tc.restore_unretract = 0.
+    tc._hook_afc_restore()
+    tc.afc.in_toolchange = False
 
-    log = change(tc, gcmd)
+    tc._toolchange(gcmd, 2)
 
-    assert "G1 Z5.200 F1200" in log and "G1 Z3.200 F1200" in log
-    assert not any(command.startswith("G1 E") for command in log)
+    assert tc.log == ["release T0", "lock T2", "withdraw T2"]
+    assert tc.pending_unretract == 0.
 
 
-def test_a_retract_alone_does_not_move_z(travel):
+def test_a_cold_head_is_not_retracted_and_nothing_is_owed(travel):
     tc, gcmd = travel
-    tc.restore_z_hop = 0.
+    tc.extruder.can_extrude = False
 
-    log = change(tc, gcmd)
+    log = afc_change(tc, gcmd)
 
-    assert "G1 E-0.400 F1800" in log and "G1 E0.300 F200" in log
-    assert not any(command.startswith("G1 Z") for command in log)
+    assert not any(line.startswith("G1 E") for line in log), log
+    assert any("below minimum extrusion temperature" in line for line in log)
 
 
-def test_a_cold_tool_is_not_retracted_or_unretracted(travel):
+def test_the_unretract_never_exceeds_what_was_retracted(travel):
     tc, gcmd = travel
-    tc.extruder = Extruder(can_extrude=False)
+    tc.dock_unretract = 0.4
+    tc._hook_afc_restore()
+    tc.pending_unretract = 0.1
 
-    log = change(tc, gcmd)
+    tc.afc.restore_pos()
 
-    assert not any(command.startswith("G1 E") for command in log)
-    assert any("below minimum extrusion temperature" in line
-               for line in log if not line.startswith(("G", "M", "SAVE")))
+    assert "G1 E0.100 F200" in tc.log
 
 
-def test_the_first_pickup_has_nothing_to_raise_but_still_retracts(travel):
+def test_a_failed_restore_drops_the_owed_filament(travel):
     tc, gcmd = travel
-    tc.mounted = -1
+    tc._hook_afc_restore()
+    tc._toolchange(gcmd, 2)
+    tc.afc.fail = True
 
-    log = change(tc, gcmd)
+    with pytest.raises(CommandError):
+        tc.afc.restore_pos()
 
-    assert "SAVE_GCODE_STATE NAME=_ff_dock_zhop" not in log
-    assert "G1 E-0.400 F1800" in log and "G1 E0.300 F200" in log
+    assert tc.pending_unretract == 0.
+    assert not any(line.startswith("SAVE_GCODE_STATE NAME=_ff_dock_unretract")
+                   for line in tc.log)
 
 
-def test_reselecting_the_mounted_tool_keeps_the_plain_return(travel):
+def test_a_new_change_drops_a_retract_still_owed_from_the_last(travel):
     tc, gcmd = travel
+    tc.pending_unretract = 0.4
     tc.mounted = 2
 
-    log = change(tc, gcmd, tool=2)
+    tc._toolchange(gcmd, 2)    # re-select: no grab, no retract
 
-    assert "release T2" not in log
-    assert log[-4:] == ["SAVE_GCODE_STATE NAME=_ff_restore_axis", "G90",
-                        "G1 X100.000 Y50.000 F9000",
-                        "RESTORE_GCODE_STATE NAME=_ff_restore_axis"]
-    assert not any(command.startswith("G1 E") for command in log)
-    assert not any(command.startswith("G1 Z") for command in log)
+    assert tc.pending_unretract == 0.
 
 
-def test_without_xy_restored_the_protection_is_off(travel):
+def test_the_hook_wraps_afc_once(travel):
     tc, gcmd = travel
-    tc.restore_axis = ""
+    tc._hook_afc_restore()
+    wrapped = tc.afc.restore_pos
+    tc._hook_afc_restore()
 
-    log = change(tc, gcmd)
-
-    assert log == ["release T0", "grab T2 in_dock=False"]
-
-
-def test_z_only_restore_is_not_protected(travel):
-    tc, gcmd = travel
-    tc.restore_axis = "Z"
-
-    log = change(tc, gcmd)
-
-    assert "grab T2 in_dock=False" in log
-    assert "SAVE_GCODE_STATE NAME=_ff_dock_zhop" not in log
-    assert not any(command.startswith("G1 E") for command in log)
-
-
-def test_the_hop_follows_the_captured_z_not_a_fixed_height(travel, monkeypatch):
-    tc, gcmd = travel
-    monkeypatch.setattr(tc, "_capture_position",
-                        lambda: [10., 20., 0.6, 0.])
-
-    log = change(tc, gcmd)
-
-    assert log.count("G1 Z2.600 F1200") == 2
-    assert "G1 Z0.600 F1200" in log
+    assert tc.afc.restore_pos is wrapped

@@ -178,6 +178,11 @@ fi
 get "https://github.com/mainsail-crew/moonraker-timelapse/archive/$TIMELAPSE_VERSION.tar.gz" \
     "$TIMELAPSE_TGZ" "$TIMELAPSE_SHA256"
 
+# AFC. Ungated like timelapse: ff-afc.cfg is always included, and a section
+# whose extra is missing stops klippy at config load.
+get "https://github.com/AFCProject/AFC-Klipper-Add-On/archive/$AFC_VERSION.tar.gz" \
+    "$AFC_TGZ" "$AFC_SHA256"
+
 # The encoder for it. download.videolan.org, not code.videolan.org: the latter
 # is behind bot protection that answers a download with an HTML page.
 get "https://download.videolan.org/pub/videolan/x264/snapshots/x264-$X264_VERSION.tar.bz2" \

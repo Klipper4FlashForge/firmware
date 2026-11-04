@@ -63,7 +63,8 @@ Mainsail, HelixScreen, OrcaSlicer — anything that speaks Moonraker
         ▼
      Klipper streams the file
         │
-        ├─ a bare `T2` ─────► ff_toolchange performs the change
+        ├─ a bare `T2` ─────► AFC picks the head mapped to T2,
+        │                     ff_toolchange performs the change
         └─ PAUSE / RESUME / CANCEL_PRINT ─► macros in ff-print-macros.cfg
         │
         ▼
@@ -77,6 +78,20 @@ one binary.
 Step by step, with the app's own sequence, the fork code that makes a
 Mainsail print hang, and what `START_PRINT` actually sends:
 [The print pipeline](print-pipeline.md).
+
+### Tool numbers are logical
+
+A file's `T0`..`T3` name slicer tools, not heads. AFC (`ff-afc.cfg`) owns
+`T<n>` and `M104`/`M109 T<n>` and resolves each through its map, one lane
+per head (`e0`..`e3`), which `SET_MAP` changes and `AFC.var.unit` remembers.
+`START_PRINT` translates the file's `TOOL=`/`TOOLS=` through the same map
+before the tool-presence gate, the calibration gate and the nozzle clean, so
+those act on the heads that will print. Anything that must reach a *physical*
+head bypasses the map: `SELECT_TOOL T=<n>` to grab it, and
+`SET_HEATER_TEMPERATURE HEATER=<extruder>` for heat (`extruder`,
+`extruder1`..`extruder3`). The shipped macros do
+exactly that. The owner-facing side is
+[Filament and spools](filament-and-spools.md).
 
 ---
 

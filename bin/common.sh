@@ -51,6 +51,7 @@ TIMELAPSE_TGZ="${TIMELAPSE_TGZ:-$ROOT/vendor/moonraker-timelapse-${TIMELAPSE_VER
 X264_TGZ="${X264_TGZ:-$ROOT/vendor/x264-${X264_VERSION:-unpinned}.tar.bz2}"
 FFMPEG_TGZ="${FFMPEG_TGZ:-$ROOT/vendor/ffmpeg-${FFMPEG_VERSION:-unpinned}.tar.xz}"
 KLIPPER_TGZ="${KLIPPER_TGZ:-$ROOT/vendor/klipper-${KLIPPER_VERSION:-unpinned}.tar.gz}"
+AFC_TGZ="${AFC_TGZ:-$ROOT/vendor/AFC-Klipper-Add-On-${AFC_VERSION:-unpinned}.tar.gz}"
 MIPS_TOOLCHAIN_TGZ="${MIPS_TOOLCHAIN_TGZ:-$ROOT/vendor/${MIPS_TOOLCHAIN_FILE:-mips-toolchain.tar.gz}}"
 SKALIBS_TGZ="${SKALIBS_TGZ:-$ROOT/vendor/skalibs-${SKALIBS_VERSION:-unpinned}.tar.gz}"
 S6_TGZ="${S6_TGZ:-$ROOT/vendor/s6-${S6_VERSION:-unpinned}.tar.gz}"
@@ -59,7 +60,7 @@ S6RC_TGZ="${S6RC_TGZ:-$ROOT/vendor/s6-rc-${S6RC_VERSION:-unpinned}.tar.gz}"
 
 export MAINSAIL_ZIP FLUIDD_ZIP HELIX_TGZ MOONRAKER_TGZ KLIPPER_TGZ MIPS_TOOLCHAIN_TGZ
 export SKALIBS_TGZ S6_TGZ EXECLINE_TGZ S6RC_TGZ
-export TIMELAPSE_TGZ X264_TGZ FFMPEG_TGZ
+export TIMELAPSE_TGZ X264_TGZ FFMPEG_TGZ AFC_TGZ
 
 # Built with the GLIBC toolchain above: a musl-linked interpreter cannot dlopen
 # a glibc c_helper.so, and dlopen is how klippy loads it.

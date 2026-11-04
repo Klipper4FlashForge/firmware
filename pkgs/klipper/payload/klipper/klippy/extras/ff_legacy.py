@@ -7,7 +7,7 @@
 # the moonraker API, and stamps the install so it never runs again.
 #
 # Deliberately NOT a klippy:ready handler: that would re-decide a
-# once-per-install chore on every ready, at the one moment klippy cannot know
+# once-per-printer migration on every ready, at the one moment klippy cannot know
 # whether the rest of the machine is up.
 #
 #   FF_IMPORT_FIRMWARE_CONFIG [DIR=/usr/data/firmwareRes/config] [APPLY=1]
@@ -103,13 +103,6 @@ class FFFirmwareConfig:
         # zoffset.json is 1-BASED: z_offset_t1 is tool 0.
         return [self.num('zoffset', 'z_offset_t%d' % (index + 1))
                 for index in range(EXTRUDER_COUNT)]
-
-    def speed(self, key):
-        # mm/s in the file; the app multiplies by 60 and ignores <= 0.
-        mm_per_second = self.num('test', key)
-        if mm_per_second is None or mm_per_second <= 0:
-            return None
-        return int(round(mm_per_second * 60.0))
 
 
 class FFLegacy:
@@ -222,13 +215,8 @@ class FFLegacy:
             value = firmware.num('test', key)
             if value is not None:
                 wanted.append((option, value, "%.6g"))
-        fast_feed = firmware.speed('grabSpeed')
-        slow_feed = firmware.speed('grabSpeedSlow')
-        if fast_feed is not None:
-            wanted.append(('fast_feed', fast_feed, "%d"))
-        if slow_feed is not None:
-            wanted.append(('slow_feed', slow_feed, "%d"))
-            wanted.append(('release_slow_feed', slow_feed, "%d"))
+        # grabSpeed/grabSpeedSlow are not compared: the dock motion is no
+        # longer the app's, and its feeds have no counterpart here.
         snippet = []
         for option, value, fmt in wanted:
             running = (getattr(toolchange, option, None)

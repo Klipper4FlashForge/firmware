@@ -33,8 +33,8 @@ UI. What is genuinely still unported is marked as such per item. Kept as referen
   `TOOL_LOCATE_SENSOR` / `TOOL_CALIBRATE_TOOL_OFFSET`
   (`45-tool-offset-calibration.md`,
   `46-offset-calibration-recovered.md`); the JSON is imported by
-  `FF_IMPORT_FIRMWARE_CONFIG` — once per install, run for you at the first boot
-  by `bin/ff-startup.py` — and is never a runtime source.
+  `FF_IMPORT_FIRMWARE_CONFIG` — once when the printer first migrates from
+  stock, run for you by `bin/ff-startup.py` — and is never a runtime source.
 - **Input shaper**: `STEPPER_RESONANCE_FACTORY_CALIBRATE` (fork) / `SHAPER_CALIBRATE`.
 - **Auto PA**: seven PA candidates, one slow-fast-slow line each, scored by the closed
   eBoard MCU via `PA_ACTION`/`PA_GET`; the mean of three passing sweeps is stored as a

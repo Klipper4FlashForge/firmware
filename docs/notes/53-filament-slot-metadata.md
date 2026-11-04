@@ -1,8 +1,14 @@
 # Filament slot metadata: how a spool reaches OrcaSlicer
 
-**Status: the path is designed and implemented upstream, and not yet in the
-HelixScreen build we ship.** Everything on the Klipper side of it already
-works. What is missing is one commit of HelixScreen, named at the end.
+**Status: the Creator 5 now reaches OrcaSlicer through AFC, not through the
+tool-changer path below.** With `ff-afc.cfg` loaded, HelixScreen runs its AFC
+backend (a filament system outranks a tool changer in its discovery), and
+AFC writes `lane_data` itself: one record per lane `e0`..`e3`, carrying the
+lane's `map` as its tool number, and it deletes the whole namespace at every
+PREP so records left by the tool-changer backend do not reach OrcaSlicer as
+duplicate trays. The rest of this note describes the tool-changer path, which
+is what a Creator 5 without AFC would use; it stays as the reference for how
+the pieces fit.
 
 OrcaSlicer 2.4.0 and later can show the printer's filament slots in the send
 dialog and offer to map the project's filaments onto them. It learns those
@@ -192,8 +198,9 @@ Nothing in `pkgs/` needs to change for this. `ff_toolchange.py` already
 publishes the status surface HelixScreen's tool-changer backend is written
 against — `_ToolchangerView` and `_ToolView` in
 [`ff_toolchange.py`](../../pkgs/klipper/payload/klipper/klippy/extras/ff_toolchange.py),
-plus `SELECT_TOOL`, `UNSELECT_TOOL`, `ASSIGN_TOOL`, `INITIALIZE_TOOLCHANGER`
-and `VERIFY_TOOL_DETECTED` under their klipper-toolchanger names — and
+plus `SELECT_TOOL` and `UNSELECT_TOOL` under their klipper-toolchanger names
+(the tool-changer backend's `ASSIGN_TOOL` and `INITIALIZE_TOOLCHANGER` went
+when AFC took over) — and
 [`flashforge_creator5.json`](../../pkgs/helixscreen/payload/helixscreen/config/printer_database.d/flashforge_creator5.json)
 already declares `"ams_type": "tool_changer"` for both models.
 
@@ -207,22 +214,13 @@ on 2026-08-24. Our `creator5` branch's last catch-up merge from upstream is
 `6d0a53ebe`, 2026-08-20 — four days short of it. The fix is an upstream
 catch-up and a `HELIX_VERSION` bump in `versions.env`, not new code here.
 
-## Loose end: the printer's own idea of what is loaded
+## Resolved: the printer's own idea of what is loaded
 
-`ff-filament.cfg` carries
-`variable_tool_material: ['PLA', 'PLA', 'PLA', 'PLA']` — static config,
-hand-edited, read by `START_PRINT`'s nozzle clean to pick a temperature when
-the job does not give it one. `LOAD_FILAMENT TOOL=n MATERIAL=PETG` accepts a
-material, uses it for the load temperature, and discards it.
-
-So after the catch-up there will be two records of what is in each tool that
-can disagree: this variable and the `lane_data` entry. Making Klipper report
-its own per-tool material for HelixScreen to merge is the wrong fix — upstream
-deliberately made the store the sole source for tool changers, and a
-firmware-reported layer would be ours to maintain forever. Having
-`LOAD_FILAMENT` and `UNLOAD_FILAMENT` write `tool_material` back with
-`SET_GCODE_VARIABLE` would at least make the printer self-consistent within a
-session. Neither is done.
+`ff-filament.cfg` used to carry a hand-edited `tool_material` list, a second
+record of what was in each head that could disagree with `lane_data`. It is
+gone. `LOAD_FILAMENT`, `UNLOAD_FILAMENT` and the nozzle clean read AFC's lane
+instead (`printer['AFC_lane e<n>']`: its `extruder_temp`, else `material`
+through the `temps` table), so the printer and the slicer read one record.
 
 ## Sources
 
