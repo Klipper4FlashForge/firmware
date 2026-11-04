@@ -35,7 +35,7 @@ Reuses `_FF_FILAMENT_PREP` (new `ALLOW_PRINTING=1`, since `print_stats.state` is
 `ACTIVATE_EXTRUDER` when already mounted), `G1 Z purge_z` if below, the chute approach with the
 per-tool nudge, `TEMPERATURE_WAIT ±3`, chamber fans off. Then, verbatim from the app:
 `M83 G92 E0 G1 E50 F<speed> M400 M106 P1 S153 G1 E-5 M400`, `G1 X250 F6000`,
-`G1 Y13.8 F24000`, `G1 X266.5 F6000`, `G1 Z<clean_wipe_z, raw-framed> F600`,
+`G1 Y13.8 F24000`, `G1 X266.5 F6000`, `G1 Z<clean_wipe_z> F600`,
 `M104 S<temp-100>`,
 `TEMPERATURE_WAIT MAXIMUM=<temp-97>`, `M106 P1 S0`, `G1 Z10 F1200`, and
 `_FF_FILAMENT_FINISH RELEASE=1 HEAT_OFF=0` (chamber fans back, `UNSELECT_TOOL`). The hotend
@@ -52,15 +52,16 @@ sets to NOZZLE). So with the shipped `tool_material: ['PLA','PLA','PLA','PLA']`,
 
 - **Gate scope**: the app checks only the initial tool at prepare (the others fail at their
   grab, after the bed is already heating); we refuse up front for all of TOOLS.
-- **Purge / wipe heights** are `purge_z` (8.0) and `clean_wipe_z` (1.0) in the RAW eddy
-  frame, i.e. the app's `probeZ + 8` / `probeZ + 1` with probeZ taken as 0 — no fresh eddy
-  `PROBE_ACCURACY` at (265, 4.8). `_FF_NOZZLE_WIPE` subtracts every layer between a
-  G-code Z and the machine — `gcode_move.homing_origin.z`, the mounted tool's
-  `gcode_z_offset` and `toolchanger.print_z_offset` — so the `G1 Z...` it emits is not
-  literally 1.0. It used to subtract only the first, which was the whole offset while
-  everything shared `homing_origin`; once the per-tool frame moved into its own transform
-  that left the nozzle ~3.2 mm high and the wipe silently stopped touching the spot. Same
-  assumption as LOAD_FILAMENT; unmeasured.
+- **Purge / wipe heights** are `purge_z` (8.0) and `clean_wipe_z` (1.0) as G-code Z with the
+  tool mounted, i.e. the app's `probeZ + 8` / `probeZ + 1` with probeZ taken as 0 — no fresh
+  eddy `PROBE_ACCURACY` at (265, 4.8). The app's heights are bed-frame values: on a Creator 5
+  Pro, probeZ measured ~0.12 and first contact with the wipe pad was at G-code Z +1.0
+  (Klipper4FlashForge/firmware#35, comment by @sjalife). An earlier version read them as raw
+  heights and subtracted `homing_origin.z`, the tool's `gcode_z_offset` and
+  `toolchanger.print_z_offset`, which sent the wipe to G-code Z −1.98, about 3 mm into the
+  pad. The purge's "raise if below" check compared the raw `toolhead.position.z` (~10 after a
+  grab) with that G-code target, so it never lifted and purged at ~7; it now compares
+  `gcode_move.gcode_position.z`.
 - **Cool-down wait** has no timeout (`TEMPERATURE_WAIT`); the app gives up after 180 s with
   E003x. `clean_cool_delta: 0` skips it (much faster, less clean).
 - The PA-test variant (`paTest` flag → `SET_KINEMATIC_POSITION` + `paTestMgr`, now recovered
@@ -83,8 +84,7 @@ A slicer-side start-gcode snippet can build TOOLS/TEMPS from `is_extruder_used[n
 
 ## Open
 
-- Hardware: wipe spot geometry (is there a pad at 266.5/13.8? Z clearance with
-  `clean_wipe_z` 1.0 in the eddy frame, i.e. ~−2.2 mm physical relative to the bed plane —
-  the bed does not extend there).
+- Hardware: wipe-pad height on other machines. One Creator 5 Pro measured first contact at
+  G-code Z +1.0 with T0; other tools and the non-Pro Creator 5 are unmeasured.
 - Whether the app's `err == tool+1` tolerance after `doGrabExtruderMgr` matters
   (probably "already holding this tool").
