@@ -103,6 +103,39 @@ profile that runs its own `G28` **needs** this off: our `G28` docks a mounted
 tool before homing Z, so it would dock the tool preparation just grabbed and
 print with an empty carriage.
 
+### A file that does not fit the machine
+
+Before anything heats or moves, `[ff_print]` reads the whole file once for the
+positions it moves to and refuses it if it goes beyond what the machine
+reaches: both ends of X and Y, and the top of Z. The check is made in machine
+coordinates, with the offset of the tool that is mounted at each point added,
+because that is what Klipper checks: a tool whose nozzle sits 0.4 mm further
+out has a limit 0.4 mm closer. Mainsail's console says which axis and by how
+much:
+
+```
+ff_print: not starting job.gcode: the file moves beyond what the printer
+reaches: Y up to 263.1 mm (G-code Y262.696 and T1's offset +0.414) -- the
+machine reaches 260.0 mm. Move the object or the prime tower in the slicer
+and slice again (check_bounds: False in [ff_print] turns this check off).
+```
+
+Without it the same file runs until its first move out of range: on
+2026-10-14 that was two minutes in, with the nozzles hot and the mesh probed,
+for a prime tower that was 0.018 mm too far out.
+
+The reading takes about a second per megabyte (2.9 s for a 3 MB file) and
+goes on in a thread, so Klipper is not held up. A file it cannot read in 40 s
+is started unchecked. Relative stretches (`G91` to the next `G90`) are not
+positions and are skipped, arcs count by their end points, and the range is the
+axis range Klipper reports, so a changed `position_max` is followed. The
+extents it found are in `printer.ff_print.extents`. To turn the check off:
+
+```ini
+[ff_print]
+check_bounds: False
+```
+
 ### Drive the sequence from the slicer
 
 With `prepare: 0`, call it yourself from Machine start G-code:
@@ -149,6 +182,15 @@ than the numbers Orca expands into the start G-code, which in a multi-plate
 project can belong to another plate. `ADAPTIVE_MESH_TOGGLE` (a tile in
 Mainsail) switches probing off, and the saved `MESH_DATA` is loaded instead.
 It is enabled again after a restart.
+
+---
+
+## What the printer counts
+
+Each job is timed phase by phase (homing, heating, mesh, purge, tool
+changes, printing), the filament of every tool is measured, and tool
+changes are counted with their duration and failures. How to read that, and
+what it does and does not cover, is on the [Statistics](statistics.md) page.
 
 ---
 

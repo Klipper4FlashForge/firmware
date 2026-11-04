@@ -16,6 +16,7 @@
 
 import contextlib
 import logging
+import math
 
 EXTRUDER_COUNT = 4
 
@@ -32,6 +33,8 @@ GRAB_ATTEMPTS = 3
 RELEASE_ATTEMPTS = 3
 RELEASE_RETRIES = 3         # MOTOR_RELEASE sends per attempt (fail on 3rd)
 RELEASE_STAGE_BACKOFF = 10.0    # release staging "G1 X<dock-10>" (@0xdb6af8)
+CORRIDOR_MARGIN = 2.0           # mm: a return this close to x_safe, or past
+                                # it, is "out there" (restore_via_corridor)
 PULLBACK_FEED = 4800            # grab pullback's literal " F4800" (@0xdb4d40)
 
 # Firmware error codes. Per-tool families report E<base + tool>; both grab
@@ -191,6 +194,7 @@ class _ToolTransform:
                 self.toolchange.offset_z[tool] + self.toolchange.job_z)
 
     def move(self, newpos, speed):
+        assert self.next_transform is not None
         offsets = self._offsets()
         if offsets is None:
             return self.next_transform.move(newpos, speed)
@@ -199,6 +203,7 @@ class _ToolTransform:
              newpos[2] + offsets[2]] + list(newpos[3:]), speed)
 
     def get_position(self):
+        assert self.next_transform is not None
         base = self.next_transform.get_position()
         offsets = self._offsets()
         if offsets is None:
@@ -211,7 +216,39 @@ class FFToolchangeError(Exception):
     """A toolchange step failed or the sensors report an unusable state."""
 
 
+def _macro_configured(config, name):
+    """Is there a [gcode_macro <name>]? Klipper registers a macro under
+    name.upper(), so a section written in any case claims the command."""
+    for section in config.get_prefix_sections('gcode_macro '):
+        words = section.get_name().split(None, 1)
+        if len(words) == 2 and words[1].upper() == name.upper():
+            return True
+    return False
+
+
 class FFToolchange:
+    # N4S4 additions (prime-tower awareness, per-pickup retract, plate and
+    # material Z, shared stepper, statistics). __init__ sets the real values.
+    # These class-level defaults keep a bare FFToolchange.__new__() object --
+    # what the unit tests build -- on the plain behaviour, so none of the
+    # additions can change a tool change that does not use them.
+    prime_tower_geometry = None
+    purge_pickup_armed = False
+    job_tool_mask = 0
+    purge_retract = None
+    purge_retract_dwell_ms = 0
+    tower_repeat_retract = 0.
+    no_tower_prime_macro = ''
+    protect_every_change = False
+    restore_via_corridor = False
+    flush_steps_before_wait = False
+    shared_stepper = False
+    print_base_z = 0.
+    plate_z = 0.
+    material_z = 0.
+    _dock_retract = None
+    _stats = None
+
     def __init__(self, config):
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
@@ -252,7 +289,14 @@ class FFToolchange:
         self.gcode_transform = _ToolTransform(self)
         # Print-scoped Z, the job terms of TOOLCHANGE_SET_PRINT_OFFSET.
         # Its own slot rather than a share of homing_origin, so that
-        # clearing one does not silently clear the other.
+        # clearing one does not silently clear the other. It is the sum of
+        # three independent components -- the app's temperature/bed/layer
+        # base, a build-plate term and the active filament's term -- so
+        # tuning one never overwrites another, tool calibration or the
+        # operator's babystep. job_z is what the move transform consumes.
+        self.print_base_z = 0.0
+        self.plate_z = 0.0
+        self.material_z = 0.0
         self.job_z = 0.0
         self.refresh_offsets()
         # True while a tool select/change/park sequence is running (reported as
@@ -320,6 +364,55 @@ class FFToolchange:
             maxval=self.restore_retract)
         self.restore_unretract_feed = config.getint(
             'restore_unretract_feed', self.restore_retract_feed, minval=1)
+        # N4S4: a pickup that is known to be followed by a purge can retract
+        # more than the ordinary restore_retract without risking a missing
+        # first extrusion. Used only for a pickup armed with
+        # TOOLCHANGE_PREPARE_PICKUP and, once the job's prime tower is
+        # registered (TOOLCHANGE_SET_PRIME_TOWER), for a tool's first pickup
+        # of the job. A zero dwell adds no pause.
+        self.purge_retract = config.getfloat(
+            'purge_retract', self.restore_retract, minval=0.)
+        self.purge_retract_dwell_ms = config.getint(
+            'purge_retract_dwell_ms', 0, minval=0)
+        # N4S4: once the prime tower is registered, a tool that was already
+        # used in this job was retracted by the slicer when it parked it.
+        # Adding the dock retract on top stacks a pressure deficit, so repeat
+        # pickups retract this much instead (zero as shipped).
+        self.tower_repeat_retract = config.getfloat(
+            'tower_repeat_retract', 0., minval=0.)
+        # N4S4: a macro the change runs right after a pickup that has no
+        # prime tower to return to. Setting it also turns on the no-tower
+        # rule: without a registered tower such a change does not return to
+        # the model, it leaves the tool raised for the macro's prime.
+        self.no_tower_prime_macro = config.get(
+            'no_tower_prime_macro', '').strip()
+        # N4S4: the original protects a change (hop before the old tool
+        # crosses to its dock, retract in the new tool's dock) only when it
+        # restores X or Y. With this on, a change that restores nothing is
+        # protected too: the pickups of the cleaning macros, which pass an
+        # empty RESTORE_AXIS, and a bare T<n> when restore_axis is empty. The
+        # tool then stays raised and retracted for whatever travel follows.
+        self.protect_every_change = config.getboolean(
+            'protect_every_change', False)
+        # N4S4: the docks stand right of x_safe, tool after tool along Y. The
+        # return after a change is one straight move, so to a point out there
+        # (the purge chute, the wipe pad) it cuts diagonally across the docked
+        # tools with the new tool on the carriage. With this on, a return to
+        # a point beyond x_safe goes along the safe column first (Y), then
+        # out (X), the way the dock moves themselves travel.
+        self.restore_via_corridor = config.getboolean(
+            'restore_via_corridor', False)
+        # N4S4: Klipper hands the MCU the last stretch of a move (the part that
+        # starts within about 50 ms of its end: the braking) only when a later
+        # flush comes, and while the queue is draining that flush is a timer
+        # that fires 0.2 s before the steps are due. A host stall of that
+        # length at that moment leaves the stepper without its last steps and
+        # the MCU shuts down with "Timer too close". The wait that every dock
+        # step ends with can ask for that flush at once, so that all of the
+        # motion is on the MCU before the host starts waiting. It costs no
+        # time: the wait is as long as it was.
+        self.flush_steps_before_wait = config.getboolean(
+            'flush_steps_before_wait', False)
 
         # Sensor names.
         #  position buttons: one per tool, PRESSED == that tool is docked.
@@ -363,21 +456,61 @@ class FFToolchange:
         self.runout_switch = []     # full object names, resolved at connect
         self.runout_motion = []
         self.armed_tool = -1
+        # N4S4: set once per sliced job by TOOLCHANGE_SET_PRIME_TOWER (from
+        # DEFINE_PRIME_TOWER_OBJECT). It lets a bare T<n> tell "already on the
+        # tower" from "over the model, then travel to the tower" without
+        # looking ahead in the file.
+        self.prime_tower_geometry = None
+        # N4S4: one-shot hint for a pickup that is followed by a purge line,
+        # set by TOOLCHANGE_PREPARE_PICKUP.
+        self.purge_pickup_armed = False
+        # N4S4: tools selected since TOOLCHANGE_BEGIN_JOB, a bit per tool, so
+        # a prime-tower job can tell a first hot pickup from a tool whose
+        # previous unload already left it retracted in the dock.
+        self.job_tool_mask = 0
+        # N4S4: the Creator 5's four extruders share one stepper. [ff_extruder]
+        # keeps a single stepper object, so each pickup has to connect it to
+        # the picked tool's motion queue. Without [ff_extruder] every
+        # [extruderN] owns its stepper and nothing is synced.
+        self.shared_stepper = config.has_section('ff_extruder')
 
         self.gcode.register_command(
             'TOOLCHANGE', self.cmd_TOOLCHANGE, desc=self.cmd_TOOLCHANGE_help)
         for i in range(EXTRUDER_COUNT):
             self.gcode.register_command(
                 'T%d' % i, self._make_tn(i), desc="Select tool %d" % i)
+        # N4S4: a [gcode_macro TOOLCHANGE_STATUS] wrapper makes the status a
+        # Mainsail button, and Klipper refuses a macro named like a command
+        # that is already registered. FF_TOOLCHANGE_STATUS is always there;
+        # the plain name is registered unless such a macro is configured.
         self.gcode.register_command(
-            'TOOLCHANGE_STATUS', self.cmd_TOOLCHANGE_STATUS,
+            'FF_TOOLCHANGE_STATUS', self.cmd_TOOLCHANGE_STATUS,
             desc=self.cmd_TOOLCHANGE_STATUS_help)
+        if not _macro_configured(config, 'TOOLCHANGE_STATUS'):
+            self.gcode.register_command(
+                'TOOLCHANGE_STATUS', self.cmd_TOOLCHANGE_STATUS,
+                desc=self.cmd_TOOLCHANGE_STATUS_help)
         self.gcode.register_command(
             'TOOLCHANGE_PARK', self.cmd_TOOLCHANGE_PARK,
             desc=self.cmd_TOOLCHANGE_PARK_help)
         self.gcode.register_command(
             'TOOLCHANGE_SET_PRINT_OFFSET', self.cmd_TOOLCHANGE_SET_PRINT_OFFSET,
             desc=self.cmd_TOOLCHANGE_SET_PRINT_OFFSET_help)
+        self.gcode.register_command(
+            'TOOLCHANGE_SET_MATERIAL_OFFSET',
+            self.cmd_TOOLCHANGE_SET_MATERIAL_OFFSET,
+            desc=self.cmd_TOOLCHANGE_SET_MATERIAL_OFFSET_help)
+        self.gcode.register_command(
+            'TOOLCHANGE_SET_PRIME_TOWER',
+            self.cmd_TOOLCHANGE_SET_PRIME_TOWER,
+            desc=self.cmd_TOOLCHANGE_SET_PRIME_TOWER_help)
+        self.gcode.register_command(
+            'TOOLCHANGE_PREPARE_PICKUP',
+            self.cmd_TOOLCHANGE_PREPARE_PICKUP,
+            desc=self.cmd_TOOLCHANGE_PREPARE_PICKUP_help)
+        self.gcode.register_command(
+            'TOOLCHANGE_BEGIN_JOB', self.cmd_TOOLCHANGE_BEGIN_JOB,
+            desc=self.cmd_TOOLCHANGE_BEGIN_JOB_help)
         self.gcode.register_command(
             'TOOL_Z_ADJUST', self.cmd_TOOL_Z_ADJUST,
             desc=self.cmd_TOOL_Z_ADJUST_help)
@@ -522,10 +655,16 @@ class FFToolchange:
                 macros.add(section_words[1].upper())
 
         for macro_name in (self.grab_macro, self.grab2_macro,
-                           self.release_macro, self.stop_macro):
+                           self.release_macro, self.stop_macro,
+                           self.no_tower_prime_macro):
+            if not macro_name:
+                continue
             command = macro_name.split()[0]
             if command.upper() not in macros:
                 missing.append("gcode_macro %s" % command)
+
+        # N4S4: [ff_stats] is optional; it only listens.
+        self._stats = self.printer.lookup_object('ff_stats', None)
 
         self.runout_switch = self._resolve_runout_sensors(
             'filament_switch_sensor', self.runout_switch_prefix, missing)
@@ -616,9 +755,27 @@ class FFToolchange:
     def _run(self, script):
         self.gcode.run_script_from_command(script)
 
+    def _stats_call(self, method, *args):
+        """Report to [ff_stats] when it is configured. Statistics must never
+        break a toolchange, so a failure there only reaches the log."""
+        if self._stats is None:
+            return None
+        try:
+            return getattr(self._stats, method)(*args)
+        except Exception:
+            logging.exception("ff_toolchange: ff_stats.%s failed", method)
+            return None
+
     def _wait_moves(self):
         # Equivalent of the app's M400 before sampling sensors.
-        self.printer.lookup_object('toolhead').wait_moves()
+        toolhead = self.printer.lookup_object('toolhead')
+        if self.flush_steps_before_wait:
+            # N4S4: send the steps of the last 50 ms of motion now, not from
+            # a timer 0.2 s before they are due (see the option).
+            flush = getattr(toolhead, 'flush_step_generation', None)
+            if flush is not None:
+                flush()
+        toolhead.wait_moves()
 
     def _sleep(self, seconds):
         self.reactor.pause(self.reactor.monotonic() + seconds)
@@ -782,6 +939,21 @@ class FFToolchange:
     def _extruder_name(self, tool):
         return self.tools[tool].extruder_name
 
+    def _sync_shared_extruder_stepper(self, tool):
+        """Connect the one physical filament stepper to `tool`'s motion queue.
+
+        Only with [ff_extruder]: there [extruder] owns the stepper and the
+        logical extruders have none, so it has to follow the tool."""
+        if not self.shared_stepper:
+            return
+        extruder_name = self._extruder_name(tool)
+        self.gcode.respond_info(
+            "ff_toolchange: syncing shared extruder stepper -> %s"
+            % extruder_name)
+        self._run(
+            'SYNC_EXTRUDER_MOTION EXTRUDER=extruder MOTION_QUEUE=%s'
+            % extruder_name)
+
     def _current_max_accel(self):
         toolhead = self.printer.lookup_object('toolhead')
         return toolhead.get_status(self.reactor.monotonic())['max_accel']
@@ -806,9 +978,49 @@ class FFToolchange:
         return list(gcode_move.get_status()['gcode_position'])
 
     def _travel_protected(self, axes):
-        """Does a change that restores `axes` raise, retract and unretract?"""
-        return (('X' in axes or 'Y' in axes)
-                and (self.restore_z_hop > 0. or self.restore_retract > 0.))
+        """Does a change that restores `axes` raise, retract and unretract?
+
+        Only one that restores X or Y does, as in the original, unless
+        protect_every_change is on (N4S4): then every change does, and one
+        that restores nothing simply leaves the tool raised and retracted."""
+        return ((('X' in axes or 'Y' in axes) or self.protect_every_change)
+                and (self.restore_z_hop > 0. or self.restore_retract > 0.
+                     or (self.purge_retract or 0.) > 0.
+                     or self.tower_repeat_retract > 0.))
+
+    def _position_is_in_prime_tower(self, pos):
+        """Is the G-code position `pos` over the registered prime tower?"""
+        geometry = self.prime_tower_geometry
+        if geometry is None:
+            return False
+        cx, cy, hx, hy, cos_a, sin_a, _rotation = geometry
+        dx, dy = pos[0] - cx, pos[1] - cy
+        # Rotate the point back into the tower's local frame and test the
+        # real rectangle. This avoids treating nearby model geometry as tower
+        # merely because it lies in the larger rotation-safe mesh bounds.
+        local_x = cos_a * dx + sin_a * dy
+        local_y = -sin_a * dx + cos_a * dy
+        return abs(local_x) <= hx and abs(local_y) <= hy
+
+    def _pickup_retract(self, tool, explicit_purge=False):
+        """(distance, dwell) for this tool's next departure from its dock.
+
+        A pickup armed with TOOLCHANGE_PREPARE_PICKUP is followed by a purge
+        line, so it takes the stronger purge_retract. With a prime tower
+        registered the first pickup of a tool in the job does the same, while
+        a tool the slicer has already unloaded once takes tower_repeat_retract
+        so the two retracts do not stack. Everything else is the ordinary
+        restore_retract -- which is all a change that uses none of this gets.
+        """
+        purge = (self.restore_retract if self.purge_retract is None
+                 else self.purge_retract)
+        if explicit_purge:
+            return purge, True
+        if self.prime_tower_geometry is not None:
+            if self.job_tool_mask & (1 << tool):
+                return self.tower_repeat_retract, False
+            return purge, True
+        return self.restore_retract, False
 
     def _retract_in_dock(self):
         """Retract the newly locked tool before it leaves its dock.
@@ -817,8 +1029,12 @@ class FFToolchange:
         tool and its electrical contacts are seated when this is called.
         Relative E is borrowed for the move, and RESTORE_GCODE_STATE keeps
         the slicer's own E coordinate. Returns the distance retracted.
+
+        The distance is this pickup's plan (_pickup_retract) when _toolchange
+        made one, restore_retract otherwise.
         """
-        if self.restore_retract <= 0.:
+        retract, dwell = self._dock_retract or (self.restore_retract, False)
+        if retract <= 0.:
             return 0.
         extruder = self.printer.lookup_object('toolhead').get_extruder()
         if not extruder.get_status(
@@ -830,11 +1046,13 @@ class FFToolchange:
         self._run('SAVE_GCODE_STATE NAME=_ff_dock_retract')
         try:
             self._run('M83')
-            self._run('G1 E-%.3f F%d'
-                      % (self.restore_retract, self.restore_retract_feed))
+            self._run('G1 E-%.3f F%d' % (retract, self.restore_retract_feed))
+            if dwell and self.purge_retract_dwell_ms > 0:
+                # Let the nozzle pressure settle before the tool is drawn out.
+                self._run('G4 P%d' % self.purge_retract_dwell_ms)
         finally:
             self._run('RESTORE_GCODE_STATE NAME=_ff_dock_retract')
-        return self.restore_retract
+        return retract
 
     def _raise_before_docking(self, pos):
         """Raise the mounted nozzle before it crosses the print to its dock.
@@ -889,7 +1107,14 @@ class FFToolchange:
                 self._run('G1 Z%.3f F%d'
                           % (pos[2] + self.restore_z_hop, self.restore_z_feed))
             if xy_move:
-                self._run('G1 %s F%d' % (xy_move, self.restore_feed))
+                if (self.restore_via_corridor and 'X' in axes and 'Y' in axes
+                        and pos[0] >= self.x_safe - CORRIDOR_MARGIN):
+                    # The carriage stands on the safe column after the dock
+                    # moves: change Y there, and only then go out to X.
+                    self._run('G1 Y%.3f F%d' % (pos[1], self.restore_feed))
+                    self._run('G1 X%.3f F%d' % (pos[0], self.restore_feed))
+                else:
+                    self._run('G1 %s F%d' % (xy_move, self.restore_feed))
             if hop:
                 self._run('G1 Z%.3f F%d' % (pos[2], self.restore_z_feed))
             if unretract > 0.:
@@ -999,6 +1224,7 @@ class FFToolchange:
                         # draw an ooze string out of the dock.
                         self._run('ACTIVATE_EXTRUDER EXTRUDER=%s'
                                   % self._extruder_name(tool))
+                        self._sync_shared_extruder_stepper(tool)
                         return_retract = self._retract_in_dock()
                     # The pullback feed is the app's literal F4800
                     # (@0x7a9074), NOT the calibrated slow feed.
@@ -1010,6 +1236,7 @@ class FFToolchange:
                 logging.info("ff_toolchange: grab attempt %d/%d for T%d"
                              " failed, backing off",
                              attempt + 1, GRAB_ATTEMPTS, tool)
+                self._stats_call('note_failed_attempt', 'grab', tool)
 
                 self._run('G1 X%.3f' % self.x_approach)
                 self._wait_moves()
@@ -1041,6 +1268,7 @@ class FFToolchange:
             # approach accel, not at the restored limit.
             self._run('ACTIVATE_EXTRUDER EXTRUDER=%s'
                       % self._extruder_name(tool))
+            self._sync_shared_extruder_stepper(tool)
             self._set_tool_frame(tool)
             # Tool is on the carriage and verified: its runout / clog
             # sensors become the live ones (the app does this 3 s later
@@ -1112,6 +1340,7 @@ class FFToolchange:
                         "ff_toolchange: release attempt %d/%d for T%d: tool"
                         " never read as seated, re-approaching",
                         attempt + 1, RELEASE_ATTEMPTS, tool)
+                    self._stats_call('note_failed_attempt', 'release', tool)
                     continue
 
                 for _ in range(RELEASE_RETRIES):
@@ -1122,6 +1351,8 @@ class FFToolchange:
                         logging.info(
                             "ff_toolchange: MOTOR_RELEASE endstop not"
                             " triggered for T%d, re-issuing", tool)
+                        self._stats_call('note_failed_attempt', 'release',
+                                         tool)
                 else:
                     continue
 
@@ -1175,25 +1406,47 @@ class FFToolchange:
         # Captured before anything moves; replayed only if the change
         # succeeded, since a half-finished sequence has no position worth
         # returning to.
-        resume = self._capture_position() if restore_axis else None
+        resume = (self._capture_position()
+                  if restore_axis or self.protect_every_change else None)
         protected = self._travel_protected(restore_axis)
         return_retract = 0.
+        # For [ff_stats]: the change is timed from the moment the motion that
+        # was already queued has finished, and a failure is filed under the
+        # stage it happened in.
+        stats_token = None
+        stats_stage = 'prepare'
+        stats_error = None
+        completed = False
+        current = None
         self.changing = True
         try:
             self._wait_moves()
+            stats_token = self._stats_call('toolchange_begin', tool)
             self._ensure_homed()
             # Strict derivation here: acting on a stale or ambiguous hint
             # would mean releasing the wrong tool -- moving to another tool's
             # dock and dropping the one we are actually carrying into it.
             current, _ = self._derive_current_tool()
+            restore_back, no_tower_change = self._return_axes(
+                restore_axis, resume, current, tool)
             if current != tool:
+                # This pickup's dock retract, planned once: an armed purge
+                # hint is consumed by the pickup it was meant for.
+                self._dock_retract = self._pickup_retract(
+                    tool, explicit_purge=self.purge_pickup_armed)
+                self.purge_pickup_armed = False
                 if current >= 0:
                     if protected:
                         self._raise_before_docking(resume)
+                    stats_stage = 'release'
                     self._release(current)
                 # _grab activates the extruder and applies the tool offsets,
                 # as the app does inside doGrabExtruderLatest.
+                stats_stage = 'grab'
                 return_retract = self._grab(tool, retract_in_dock=protected)
+                stats_stage = 'finish'
+                if no_tower_change and self.no_tower_prime_macro:
+                    self._run('%s TOOL=%d' % (self.no_tower_prime_macro, tool))
             else:
                 # Same tool re-selected: still re-activate and re-apply, so
                 # the first Tn after a RESTART (which wiped the gcode
@@ -1201,22 +1454,28 @@ class FFToolchange:
                 # calls are idempotent.
                 self._run('ACTIVATE_EXTRUDER EXTRUDER=%s'
                           % self._extruder_name(tool))
+                self._sync_shared_extruder_stepper(tool)
                 self._set_tool_frame(tool)
                 self._arm_runout(tool)
+            self.job_tool_mask |= 1 << tool
             # No channel to announce. FlashForge's virtual_sdcard tracked one
             # so it could rewrite bare M104/M109 and SET_PRESSURE_ADVANCE per
             # channel. Upstream needs none: both apply to the ACTIVE extruder,
             # which _grab has just set to this tool.
+            stats_stage = 'restore'
             if resume is not None:
                 # Re-selecting the mounted tool crossed nothing and retracted
                 # nothing, so it keeps the plain X/Y-first return.
                 self._restore_position(
-                    restore_axis, resume,
+                    restore_back, resume,
                     protected=protected and current != tool,
                     return_retract=return_retract)
+            completed = True
         except FFToolchangeError as err:
+            stats_error = str(err)
             raise gcmd.error(str(err))
-        except self.printer.command_error:
+        except self.printer.command_error as err:
+            stats_error = str(err) or 'klipper command error'
             # A raw Klipper error escaped the sequence. The finally-clauses
             # restored accel, motor and modal state, but the gcode X/Y offsets
             # may still be zeroed and no tool offsets applied -- tell the
@@ -1228,6 +1487,55 @@ class FFToolchange:
             raise
         finally:
             self.changing = False
+            self._dock_retract = None
+            if stats_token is not None:
+                self._stats_call(
+                    'toolchange_end', stats_token, current, tool, completed,
+                    stats_stage,
+                    stats_error or (None if completed
+                                    else 'unexpected error'))
+
+    def _return_axes(self, restore_axis, resume, current, tool):
+        """(axes to restore, True for a change without a prime tower).
+
+        N4S4. Replaying X/Y puts the new tool back where the old nozzle was.
+        Over the printed model that is wrong: the new tool would descend onto
+        the part and leave a dot before travelling on to the prime tower. So
+        X/Y are left out, and the tool stays raised and retracted for the
+        slicer's own travel, when
+          * a prime tower is registered (TOOLCHANGE_SET_PRIME_TOWER) and the
+            change was issued outside it;
+          * the first pickup was armed with TOOLCHANGE_PREPARE_PICKUP, since a
+            purge line follows it; or
+          * no_tower_prime_macro is configured and no tower is registered.
+        Without any of these the change is exactly what it was.
+        """
+        restore_xy = 'X' in restore_axis or 'Y' in restore_axis
+        if not restore_xy:
+            return restore_axis, False
+        tower = self.prime_tower_geometry
+        initial_pickup = current < 0 and self.purge_pickup_armed
+        no_tower = (current >= 0 and tower is None
+                    and bool(self.no_tower_prime_macro))
+        off_tower = (current >= 0 and tower is not None
+                     and not self._position_is_in_prime_tower(resume))
+        if initial_pickup:
+            self.gcode.respond_info(
+                "ff_toolchange: initial T%d pickup is followed by a purge"
+                " line; skipping return to the final mesh point" % tool)
+        elif no_tower:
+            self.gcode.respond_info(
+                "ff_toolchange: T%d selected without a prime tower; keeping"
+                " the tool raised at the safe corridor for the post-heat"
+                " chute prime" % tool)
+        elif off_tower:
+            self.gcode.respond_info(
+                "ff_toolchange: T%d issued outside the registered prime"
+                " tower; keeping the tool raised/retracted for the slicer's"
+                " tower travel" % tool)
+        else:
+            return restore_axis, False
+        return ''.join(a for a in restore_axis if a not in 'XY'), no_tower
 
     def _reset_gcode_position(self):
         """Invalidate gcode_move's position cache after a frame change.
@@ -1304,7 +1612,8 @@ class FFToolchange:
 
     cmd_TOOLCHANGE_SET_PRINT_OFFSET_help = (
         "Apply the app's absolute print-start Z offset "
-        "(NOZZLE=<degC> [BED=<degC>] [LAYER=<mm>] [TOOL=<0..3>] | CLEAR=1)")
+        "(NOZZLE=<degC> [BED=<degC>] [LAYER=<mm>] [PLATE=<mm>] "
+        "[TOOL=<0..3>] | CLEAR=1)")
 
     def cmd_TOOLCHANGE_SET_PRINT_OFFSET(self, gcmd):
         """Absolute print-start Z offset, ported from BuildPage::startPrint
@@ -1333,8 +1642,14 @@ class FFToolchange:
         adding it again would double it. What is left is global to the job
         rather than to a tool, which is exactly the layer homing_origin is:
 
-            SET_GCODE_OFFSET Z = temp + bed + layer   (+ the babystep,
-                                                       which stays put)
+            SET_GCODE_OFFSET Z = temp + bed + layer + plate + material
+                                                       (+ the babystep,
+                                                        which stays put)
+
+        PLATE= (here) and TOOLCHANGE_SET_MATERIAL_OFFSET are N4S4's two
+        additional, independent job terms: a build-plate correction and the
+        active filament's. They are not part of the app's sum, and neither
+        accumulates -- each is replaced, never added to.
 
         The X/Y this used to write are gone with the gap, for the same
         reason. What is left goes into the transform's own job_z rather
@@ -1347,7 +1662,11 @@ class FFToolchange:
         previous job term rather than accumulating on top of it, so a
         per-layer caller cannot drift."""
         if gcmd.get_int('CLEAR', 0, minval=0, maxval=1):
-            previous, self.job_z = self.job_z, 0.0
+            previous = self.job_z
+            self.print_base_z = 0.0
+            self.plate_z = 0.0
+            self.material_z = 0.0
+            self.job_z = 0.0
             self._reset_gcode_position()
             gcmd.respond_info("print Z offset cleared (was %+.3f); the"
                               " babystep and tool calibration stay"
@@ -1356,6 +1675,7 @@ class FFToolchange:
         nozzle = gcmd.get_float('NOZZLE')
         bed = gcmd.get_float('BED', 0.)
         layer = gcmd.get_float('LAYER', 0.)
+        plate = gcmd.get_float('PLATE', 0., minval=-0.5, maxval=0.5)
         tool = gcmd.get_int('TOOL', -1, minval=-1, maxval=EXTRUDER_COUNT - 1)
         if tool < 0:
             current, _reason = self._current_tool_or_none()
@@ -1380,15 +1700,109 @@ class FFToolchange:
         int_layer = int(layer * 100.0)
         if 0 < int_layer <= 10:
             z += -0.06
+        self.print_base_z = z
+        self.plate_z = plate
+        self.job_z = self.print_base_z + self.plate_z + self.material_z
+        self._reset_gcode_position()
         gcmd.respond_info(
             "print Z offset for T%d: %.3f (temp %+.3f, bed %+.2f,"
-            " layer %+.2f); T%d frame carries gap %+.3f, z_adjust %+.3f"
-            % (tool, z, (nozzle - 120.0) * temp_coeff,
+            " layer %+.2f, plate %+.3f, material %+.3f); T%d frame"
+            " carries gap %+.3f, z_adjust %+.3f"
+            % (tool, self.job_z, (nozzle - 120.0) * temp_coeff,
                0.08 if bed >= 100.0 else 0.0,
                -0.06 if 0 < int_layer <= 10 else 0.0,
-               tool, nozzles[tool][2] - z_station, z_adjusts[tool]))
-        self.job_z = z
+               self.plate_z, self.material_z, tool,
+               nozzles[tool][2] - z_station, z_adjusts[tool]))
+
+    cmd_TOOLCHANGE_SET_MATERIAL_OFFSET_help = (
+        "Set the active filament's absolute print Z correction "
+        "(VALUE=<-0.5..0.5mm> [MOVE=1])")
+
+    def cmd_TOOLCHANGE_SET_MATERIAL_OFFSET(self, gcmd):
+        """Replace the material component without accumulating or babystepping.
+
+        Orca's Filament start G-code runs after T<n>, so a profile can issue
+        this command whenever its material becomes active.  Repeating the
+        same VALUE is idempotent.  When Z is homed and a tool is mounted,
+        MOVE=1 (the default) applies the small correction as a dedicated Z
+        move instead of folding it diagonally into the next prime-tower line.
+        """
+        value = gcmd.get_float('VALUE', minval=-0.5, maxval=0.5)
+        move = gcmd.get_int('MOVE', 1, minval=0, maxval=1)
+        previous = self.material_z
+        if value == previous:
+            gcmd.respond_info(
+                "material Z offset unchanged at %+.3f; total print Z %+.3f"
+                % (value, self.job_z))
+            return
+
+        gcode_move = self.printer.lookup_object('gcode_move')
+        position = list(gcode_move.get_status()['gcode_position'])
+        self.material_z = value
+        self.job_z = self.print_base_z + self.plate_z + self.material_z
         self._reset_gcode_position()
+
+        mounted, _reason = self._current_tool_or_none()
+        toolhead = self.printer.lookup_object('toolhead')
+        homed = toolhead.get_status(self.reactor.monotonic())['homed_axes']
+        moved = move and mounted is not None and mounted >= 0 and 'z' in homed
+        if moved:
+            self._run('SAVE_GCODE_STATE NAME=_ff_material_z')
+            try:
+                self._run('G90')
+                self._run('G1 Z%.3f F%d'
+                          % (position[2], self.restore_z_feed))
+            finally:
+                self._run('RESTORE_GCODE_STATE NAME=_ff_material_z')
+
+        gcmd.respond_info(
+            "material Z offset %+.3f -> %+.3f; total print Z %+.3f%s"
+            % (previous, value, self.job_z,
+               " (Z moved)" if moved else ""))
+
+    cmd_TOOLCHANGE_SET_PRIME_TOWER_help = (
+        "Register or clear the current job's prime-tower XY bounds")
+
+    def cmd_TOOLCHANGE_SET_PRIME_TOWER(self, gcmd):
+        if gcmd.get_int('CLEAR', 0):
+            self.prime_tower_geometry = None
+            gcmd.respond_info("ff_toolchange: prime-tower geometry cleared")
+            return
+        width = gcmd.get_float('WIDTH', above=0.)
+        depth = gcmd.get_float('DEPTH', width, above=0.)
+        brim = gcmd.get_float('BRIM', 0., minval=0.)
+        rotation = gcmd.get_float('ROT', 0.)
+        safety = gcmd.get_float('SAFETY', 1., minval=0.)
+        cx = gcmd.get_float('CENTER_X', None)
+        cy = gcmd.get_float('CENTER_Y', None)
+        if (cx is None) != (cy is None):
+            raise gcmd.error(
+                "TOOLCHANGE_SET_PRIME_TOWER: give both CENTER_X and CENTER_Y")
+        if cx is None:
+            x = gcmd.get_float('X')
+            y = gcmd.get_float('Y')
+            cx, cy = x + width / 2., y + depth / 2.
+        hx, hy = width / 2. + brim + safety, depth / 2. + brim + safety
+        angle = math.radians(rotation)
+        self.prime_tower_geometry = (
+            cx, cy, hx, hy, math.cos(angle), math.sin(angle), rotation)
+        gcmd.respond_info(
+            "ff_toolchange: prime tower center %.3f,%.3f half-size"
+            " %.3fx%.3f rotation %.1f"
+            % (cx, cy, hx, hy, rotation))
+
+    cmd_TOOLCHANGE_PREPARE_PICKUP_help = (
+        "Arm or clear the stronger retract for the next real tool pickup")
+
+    def cmd_TOOLCHANGE_PREPARE_PICKUP(self, gcmd):
+        self.purge_pickup_armed = bool(
+            gcmd.get_int('ENABLE', 1, minval=0, maxval=1))
+
+    cmd_TOOLCHANGE_BEGIN_JOB_help = (
+        "Reset per-job tool pickup state before pre-print cleaning")
+
+    def cmd_TOOLCHANGE_BEGIN_JOB(self, gcmd):
+        self.job_tool_mask = 0
 
     cmd_TOOL_Z_ADJUST_help = (
         "Per-tool Z correction, applied live: TOOL_Z_ADJUST TOOL=<0..3> "
@@ -1619,9 +2033,25 @@ class FFToolchange:
                          % (applied, self.offset_x[applied],
                             self.offset_y[applied], self.offset_z[applied],
                             self.job_z))
+            lines.append("  job Z parts: base %+.3f, plate %+.3f,"
+                         " material %+.3f"
+                         % (self.print_base_z, self.plate_z,
+                            self.material_z))
         if self.runout_switch or self.runout_motion:
             lines.append("  runout sensors armed: %s"
                          % (", ".join(self._armed_sensors()) or "none"))
+        if self.prime_tower_geometry is None:
+            lines.append("  prime tower geometry: none")
+        else:
+            cx, cy, hx, hy, _cos_a, _sin_a, rotation = (
+                self.prime_tower_geometry)
+            lines.append("  prime tower: center %.3f,%.3f half-size"
+                         " %.3fx%.3f rotation %.1f"
+                         % (cx, cy, hx, hy, rotation))
+        seen = ["T%d" % tool for tool in range(EXTRUDER_COUNT)
+                if self.job_tool_mask & (1 << tool)]
+        lines.append("  tools selected this job: %s"
+                     % (", ".join(seen) if seen else "none"))
         for i, sensor in enumerate(self.dock_sensors):
             try:
                 lines.append("  T%d in dock (%s): %s"
