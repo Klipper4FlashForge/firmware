@@ -44,6 +44,13 @@ both printer models or through every real-world workflow.
 
 ### Changed
 
+- HelixScreen is updated to v1.2.0-beta.1-creator5 (upstream 1.2.0-beta.1).
+  It brings the upstream Creator 5 fixes from
+  [#38](https://github.com/Klipper4FlashForge/firmware/issues/38): its own
+  Creator 5 / 5 Pro printer image, correct print-history times, and no stale
+  temperatures or position after a Klipper restart. Also new: a tool-offset
+  step in the setup wizard and a filament panel organised by tool. A beta;
+  not yet run on a printer.
 - `START_PRINT` starts heating the bed before the first homing instead of after
   it, so the bed is closer to temperature when the nozzle clean ends.
 - XYZ tool calibration now verifies plate removal with two non-contact
