@@ -165,6 +165,45 @@ def test_a_second_run_does_not_re_seed(linked):
         "the second run reported seeding again:\n%s" % again.text)
 
 
+AFC_UNIT = CONFIG_DIR + "/AFC/AFC.var.unit"
+
+
+def test_afcs_state_file_is_seeded_as_an_empty_object(linked):
+    """ff-afc.cfg's VarFile. AFC's PREP reads AFC.var.unit before AFC has
+    ever written it and reports a missing or EMPTY file as an error, so the
+    first boot needs a file that parses. A real file, not a link into
+    $MODDIR: AFC rewrites it with the owner's maps and spools."""
+    unit = linked.file(AFC_UNIT)
+    assert unit.exists, (
+        "no %s -- AFC's PREP would report its state file missing on the "
+        "first boot. What the script said:\n%s" % (AFC_UNIT, linked.link_log))
+    assert unit.text.strip() == "{}", (
+        "%s holds %r, not an empty JSON object" % (AFC_UNIT, unit.text))
+    link = linked.sh("[ -L %s ] && echo link || echo file" % AFC_UNIT).out
+    assert link.strip() == "file", "%s is a symlink" % AFC_UNIT
+
+
+def test_afcs_state_survives_a_run_and_an_empty_file_is_reseeded(linked):
+    """An update runs this script again. A map the owner set with SET_MAP
+    lives in AFC.var.unit and must outlive it; an emptied file is the one
+    thing AFC cannot start from, so that one is put back."""
+    box = linked
+    owned = '{"Tools": {"e2": {"map": "T0"}}}'
+    planted = box.sh("printf '%%s\\n' '%s' > %s" % (owned, AFC_UNIT))
+    if not planted.ok:
+        pytest.fail("could not plant AFC state: %s" % planted.text)
+    again = box.sh("sh %s" % SCRIPT)
+    assert again.ok, "a second run failed: %s" % again.text
+    assert box.file(AFC_UNIT).text.strip() == owned, (
+        "the run replaced AFC's saved state -- an update would drop every "
+        "tool map and spool assignment")
+
+    emptied = box.sh(": > %s && sh %s" % (AFC_UNIT, SCRIPT))
+    assert emptied.ok, "a run over an empty state file failed: %s" % emptied.text
+    assert box.file(AFC_UNIT).text.strip() == "{}", (
+        "an empty %s was left empty, and AFC's PREP refuses one" % AFC_UNIT)
+
+
 # -------------------------------------------------------------- the linking
 
 def test_the_mods_configs_are_links_into_moddir(linked):

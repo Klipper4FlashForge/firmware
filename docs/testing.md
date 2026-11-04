@@ -12,6 +12,13 @@ make qa-replica    # the gates that decide whether a package bricks a printer
 Selection is pytest's: `-k nginx`, `-m static`, or a single test id.
 [qa-migration.md](qa-migration.md) is the design and the history.
 
+An additional opt-in `simulator` lane executes tool swaps through desktop
+Klipper and AFC, with modeled Creator 5 hardware. It includes an interactive
+motion replay and speed comparisons. See
+[the simulator instructions](../tools/creator5-sim/README.md). Run it with
+`python3 -m pytest -q qa/simulator --run-simulator`; ordinary `make qa` keeps
+the two installation-safety lanes below.
+
 ## The lanes
 
 | Lane | Needs | What it asks |

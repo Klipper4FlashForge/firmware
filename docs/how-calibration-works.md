@@ -91,8 +91,8 @@ difference between a first layer that sticks and one that does not.
 
 1. Homes if any axis is unhomed, parks the mounted tool, and verifies
    the carriage really is empty, from the dock and grab sensors.
-2. Plate check: probes station Z with the bare carriage, then sideways for
-   the bore edge.
+2. Plate check: the normal carriage probe compares a safe bed-interior point
+   with the station area and requires the latter to be recessed.
 3. Moves to the station start point (`cylinder_x`, `cylinder_y`, 28.5 /
    214.5 stock) and probes Z.
 4. **Pass 1** — four sideways probes outward at Z + 0.6 (+X, +Y, −X, −Y,
@@ -108,16 +108,18 @@ carriage** — select the tool first.
 
 `[SAVE=1]`
 
-1. Homes if any axis is unhomed, then the plate check. Both need an empty
-   carriage, so your tool is parked and picked straight back up — that is
-   expected, not a fault.
-2. Zeroes the G-code offset and works in raw machine coordinates.
-3. Same two passes as above, from `cylinder_x − 12.5` (16.0 stock), with the
-   nozzle doing the touching.
-4. Checks `nozzle_z − station_z` lands in `gap_min`…`gap_max` (1.5–5.0 mm;
+1. Homes if any axis is unhomed. A direct low-level invocation also runs the
+   plate check; `CALIBRATE_TOOL_OFFSETS` already ran it once with the station
+   pass and skips the duplicate.
+2. Picks the tool up, heats it to 200 C (or `TEMP=`), and waits within 3 C.
+3. Zeroes the G-code offset and works in raw machine coordinates.
+4. Same two passes as above, from `cylinder_x − 12.5` (16.0 stock), with the
+   hot nozzle doing the touching.
+5. Checks `nozzle_z − station_z` lands in `gap_min`…`gap_max` (1.5–5.0 mm;
    ~3.2 mm is right on a healthy machine).
-5. Stages `nozzle_x`, `nozzle_y`, `nozzle_z` into `[ff_tool <n>]`.
-6. Heater off for that tool, lifts to Z15, restores the offset frame.
+6. Stages `nozzle_x`, `nozzle_y`, `nozzle_z` into `[ff_tool <n>]`.
+7. Turns that heater off even after failure, lifts to Z15, and restores the
+   offset frame.
 
 #### `SAVE_CONFIG`
 

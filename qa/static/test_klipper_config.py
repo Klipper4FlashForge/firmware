@@ -351,6 +351,275 @@ def test_the_chamber_heater_fan_matches_the_model(model):
 
 
 # --------------------------------------------------------------------------
+# START_PRINT under AFC.
+#
+# The file's tool numbers are logical: AFC (ff-afc.cfg) decides which head
+# prints a T<n>, and SET_MAP moves that. START_PRINT's own T<n> and M104 T<n>
+# go through AFC and follow the map by themselves. The tool-presence gate, the
+# calibration gate and the nozzle clean act on HEADS, so START_PRINT has to
+# translate -- and a slip there cleans and gates one head while AFC prints
+# with another. Rendered with the real template against the status AFC and
+# ff_toolchange report, with the lanes and extruder names read out of the
+# shipped ff-afc.cfg.
+# --------------------------------------------------------------------------
+
+def _afc_lanes(cp):
+    return sorted(sec.split(None, 1)[1] for sec in cp.sections()
+                  if sec.startswith("AFC_extruder "))
+
+
+def _render(cp, macro, params, printer):
+    """One macro's own lines, one level deep, against `printer` plus every
+    gcode_macro's variables as klippy would expose them."""
+    full = dict(printer)
+    for sec in cp.sections():
+        if sec.startswith("gcode_macro "):
+            variables = {}
+            for opt in cp.options(sec):
+                if opt.startswith("variable_"):
+                    try:
+                        variables[opt[9:]] = ast.literal_eval(cp.get(sec, opt))
+                    except (ValueError, SyntaxError):
+                        variables[opt[9:]] = cp.get(sec, opt)
+            full.setdefault(sec, variables)
+    env = jinja2.Environment("{%", "%}", "{", "}")
+    info = []
+    rendered = env.from_string(cp.get("gcode_macro " + macro, "gcode")).render(
+        params=params, printer=full,
+        action_respond_info=lambda m: info.append(m) or "",
+        action_raise_error=_raise)
+    return [ln.strip() for ln in rendered.splitlines() if ln.strip()], info
+
+
+def _start_print(params, maps=None, afc=True):
+    """START_PRINT's own lines for AFC maps `maps`: {lane: ['T<n>', ...]}.
+    Unlisted lanes keep the map ff-afc.cfg ships."""
+    cp = _parse("Creator5Pro")
+    lanes = _afc_lanes(cp)
+    assert lanes, "ff-afc.cfg declares no [AFC_extruder] lanes"
+    printer = {}
+    if afc:
+        printer["AFC"] = {"lanes": lanes}
+        for lane in lanes:
+            shipped = cp.get("AFC_extruder " + lane, "map").strip()
+            printer["AFC_lane " + lane] = {
+                "map": (maps or {}).get(lane, [shipped]), "extruder": lane}
+    return _render(cp, "START_PRINT", params, printer)
+
+
+def _line(lines, cmd):
+    found = [ln for ln in lines if ln.split()[0] == cmd]
+    assert len(found) == 1, "%s: expected one line, got %s" % (cmd, found)
+    return found[0]
+
+
+def test_start_print_with_the_shipped_map_gates_and_cleans_the_files_tools():
+    lines, info = _start_print({"TOOL": "0", "TOOLS": "0:220,2:240",
+                                "NOZZLE": "220", "BED": "60"})
+    assert _line(lines, "_FF_PREFLIGHT") == "_FF_PREFLIGHT TOOL=0 TOOLS=0,2"
+    assert _line(lines, "_FF_NOZZLE_CLEAN") == \
+        "_FF_NOZZLE_CLEAN TOOLS=0,2 TEMPS=220.0,0,240.0,0 TEMP=220.0"
+    assert _line(lines, "T0") == "T0"
+    assert info == [], info
+
+
+def test_start_print_gates_and_cleans_the_heads_afc_will_print_with():
+    """SET_MAP LANE=e2 MAP=T0 moves T0 to e2: the file's T0 prints on the
+    third head, so that is the head that must be docked, calibrated and
+    cleaned at the file's T0 temperature -- while START_PRINT still asks AFC
+    for T0, which is what makes AFC pick the third head."""
+    lines, info = _start_print({"TOOL": "0", "TOOLS": "0:220,1:230",
+                                "NOZZLE": "220", "BED": "60"},
+                               maps={"e0": [], "e2": ["T0", "T2"]})
+    assert _line(lines, "_FF_PREFLIGHT") == "_FF_PREFLIGHT TOOL=2 TOOLS=2,1"
+    assert _line(lines, "_FF_NOZZLE_CLEAN") == \
+        "_FF_NOZZLE_CLEAN TOOLS=2,1 TEMPS=0,230.0,220.0,0 TEMP=220.0"
+    assert _line(lines, "T0") == "T0"
+    assert _line(lines, "M104") == "M104 S220.0 T0"
+    offset = _line(lines, "TOOLCHANGE_SET_PRINT_OFFSET")
+    assert "TOOL=" not in offset, (
+        "the print offset belongs to the head on the carriage after T0, which "
+        "under a map is not tool 0: %s" % offset)
+    assert info and "print on heads [2, 1]" in info[0], info
+
+
+def test_positional_temps_follow_the_file_tool_onto_its_head():
+    """TEMPS= is indexed by the FILE's tool number, so under a remap each
+    temperature moves with its tool to the head that will print it."""
+    lines, _ = _start_print({"TOOL": "0", "TOOLS": "0,1", "TEMPS": "200,210",
+                             "NOZZLE": "220"},
+                            maps={"e0": ["T1"], "e1": ["T0"]})
+    assert _line(lines, "_FF_NOZZLE_CLEAN") == \
+        "_FF_NOZZLE_CLEAN TOOLS=1,0 TEMPS=210.0,200.0,0,0 TEMP=220.0"
+
+
+def test_multiple_file_tools_can_map_to_one_head():
+    """AFC multiple mapping exposes a list: every T-number in it must resolve
+    to the lane's physical head for preflight, cleaning and temperatures."""
+    lines, info = _start_print(
+        {"TOOL": "1", "TOOLS": "1:220,2:220", "NOZZLE": "220"},
+        maps={"e0": [], "e1": ["T1", "T2"], "e2": []})
+    assert _line(lines, "_FF_PREFLIGHT") == "_FF_PREFLIGHT TOOL=1 TOOLS=1"
+    assert _line(lines, "_FF_NOZZLE_CLEAN") == \
+        "_FF_NOZZLE_CLEAN TOOLS=1 TEMPS=0,220.0,0,0 TEMP=220.0"
+    assert info and "file tools [1, 2] print on heads [1]" in info[0], info
+
+
+def test_start_print_without_afc_reports_takes_tools_as_heads():
+    """Before AFC's PREP has run there is no map to follow."""
+    lines, info = _start_print({"TOOL": "1", "TOOLS": "1:230", "NOZZLE": "230"},
+                               afc=False)
+    assert _line(lines, "_FF_PREFLIGHT") == "_FF_PREFLIGHT TOOL=1 TOOLS=1"
+    assert info == [], info
+
+
+# --------------------------------------------------------------------------
+# The contracts the macros rely on in ff-afc.cfg.
+# --------------------------------------------------------------------------
+
+def test_afc_multiple_mapping_is_enabled_for_helixscreen():
+    cp = _parse("Creator5Pro")
+    assert cp.getboolean("AFC", "enable_multiple_mapping")
+    end_print = cp.get("gcode_macro END_PRINT", "gcode")
+    assert "AFC_RESET_MAPPING RUNOUT=no" in end_print
+    assert "RESET_AFC_MAPPING" not in end_print.replace(
+        "AFC_RESET_MAPPING", "")
+
+
+def test_afc_lane_n_is_head_n():
+    """START_PRINT, LOAD_FILAMENT and the nozzle clean find a head's lane as
+    `AFC_lane e<n>`. A lane named for one head but bound to another's
+    extruder would clean, heat and gate the wrong head."""
+    cp = _parse("Creator5Pro")
+    lanes = _afc_lanes(cp)
+    assert lanes == ["e0", "e1", "e2", "e3"], lanes
+    for n, lane in enumerate(lanes):
+        sec = "AFC_extruder " + lane
+        want = "extruder" if n == 0 else "extruder%d" % n
+        assert cp.get(sec, "extruder_name").strip() == want, sec
+        assert cp.get(sec, "map").strip() == "T%d" % n, sec
+        assert cp.get(sec, "u1_park_detector_name").strip() == "T%d" % n, sec
+
+
+def _afc_material_temps(cp):
+    raw = cp.get("AFC", "default_material_temps")
+    pairs = [p.strip().split(":") for p in raw.split(",") if p.strip()]
+    return [(k.strip(), float(v)) for k, v in pairs]
+
+
+def test_afc_heats_from_the_same_material_table_as_the_macros():
+    cp = _parse("Creator5Pro")
+    macro = ast.literal_eval(cp.get("gcode_macro _FF_FILAMENT", "variable_temps"))
+    default = float(cp.get("gcode_macro _FF_FILAMENT", "variable_default_temp"))
+    afc = _afc_material_temps(cp)
+    afc_map = dict(afc)
+    assert afc_map.pop("default") == default
+    assert {k: float(v) for k, v in macro.items()} == afc_map
+
+
+def test_afc_material_table_resolves_every_name_to_itself():
+    """AFC takes the FIRST entry whose name is a substring of the lane's
+    material (AFC._get_default_material_temps). An entry listed after one it
+    contains -- PLA-CF after PLA -- would never be reached."""
+    cp = _parse("Creator5Pro")
+    names = [k for k, _ in _afc_material_temps(cp) if k != "default"]
+    for name in names:
+        first = next(k for k in names if k.lower() in name.lower())
+        assert first == name, "%s resolves to %s in AFC" % (name, first)
+
+
+def _filament_printer(lane=None, tool=1):
+    printer = {
+        "ff_toolchange": {"current_tool": -1},
+        "pause_resume": {"is_paused": False},
+        "configfile": {"settings": {
+            ("extruder" if tool == 0 else "extruder%d" % tool):
+                {"nozzle_diameter": 0.4}}},
+        "tool T%d" % tool: {
+            "extruder": "extruder" if tool == 0 else "extruder%d" % tool},
+    }
+    if lane is not None:
+        printer["AFC_lane e%d" % tool] = lane
+    return printer
+
+
+def _prep_temp(lines):
+    prep = _line(lines, "_FF_FILAMENT_PREP")
+    return float(re.search(r"TEMP=([0-9.]+)", prep).group(1))
+
+
+@pytest.mark.parametrize("lane,params,want", [
+    # AFC's own temperature for the lane (Spoolman's) wins...
+    ({"material": "PETG", "extruder_temp": 245}, {}, 245 + 30),
+    # ...else the table by the lane's material...
+    ({"material": "PETG", "extruder_temp": None}, {}, 240 + 30),
+    ({"material": "petg", "extruder_temp": 0}, {}, 240 + 30),
+    # ...else default_temp.
+    ({"material": "", "extruder_temp": None}, {}, 220 + 30),
+    (None, {}, 220 + 30),
+    # MATERIAL= and TEMP= on the command override the lane.
+    ({"material": "PETG", "extruder_temp": 245}, {"MATERIAL": "ABS"}, 250 + 30),
+    ({"material": "PETG", "extruder_temp": 245}, {"TEMP": "200"}, 200 + 30),
+])
+def test_load_filament_takes_its_temperature_from_the_heads_afc_lane(lane, params, want):
+    cp = _parse("Creator5Pro")
+    lines, _ = _render(cp, "LOAD_FILAMENT", dict(params, TOOL="1"),
+                       _filament_printer(lane))
+    assert _prep_temp(lines) == want, lines
+
+
+@pytest.mark.parametrize("lane,want", [
+    ({"material": "PETG", "extruder_temp": None}, 240),
+    ({"material": "PETG", "extruder_temp": 250}, 250),
+    (None, 210),
+])
+def test_the_nozzle_clean_falls_back_from_afcs_record_to_the_print(lane, want):
+    cp = _parse("Creator5Pro")
+    lines, _ = _render(cp, "_FF_NOZZLE_CLEAN", {"TOOLS": "1", "TEMP": "210"},
+                       _filament_printer(lane))
+    assert _prep_temp(lines) == want, lines
+
+
+def test_every_afc_head_waits_for_its_temperature_before_the_restore():
+    """AFC restores the print position as soon as the grab returns, so the
+    grab is _FF_AFC_SELECT: it selects the head, then waits for the target
+    the file already set, on that head's own heater."""
+    cp = _parse("Creator5Pro")
+    for n, lane in enumerate(_afc_lanes(cp)):
+        sec = "AFC_extruder " + lane
+        assert cp.get(sec, "custom_tool_swap").strip() == \
+            "_FF_AFC_SELECT TOOL=%d" % n, sec
+
+
+@pytest.mark.parametrize("tool,heater", [
+    (0, "extruder"), (1, "extruder1"), (3, "extruder3")])
+def test_the_afc_grab_waits_just_under_the_heads_target(tool, heater):
+    cp = _parse("Creator5Pro")
+    lines, _ = _render(cp, "_FF_AFC_SELECT", {"TOOL": str(tool)},
+                       {heater: {"target": 245.0}})
+    assert lines == ["SELECT_TOOL T=%d" % tool,
+                     "TEMPERATURE_WAIT SENSOR=%s MINIMUM=243.0" % heater]
+
+
+def test_the_afc_grab_does_not_wait_for_a_head_with_no_target():
+    cp = _parse("Creator5Pro")
+    lines, _ = _render(cp, "_FF_AFC_SELECT", {"TOOL": "2"},
+                       {"extruder2": {"target": 0.0}})
+    assert lines == ["SELECT_TOOL T=2"]
+
+
+def test_afc_moves_back_at_travel_speed_within_the_limits():
+    """AFC's restore after every change runs at resume_speed/resume_z_speed,
+    25 mm/s unless set -- a visible crawl back to the print on every
+    toolchange. Set, and inside what [printer] allows."""
+    cp = _parse("Creator5Pro")
+    xy = cp.getfloat("AFC", "resume_speed")
+    z = cp.getfloat("AFC", "resume_z_speed")
+    assert 25 < xy <= cp.getfloat("printer", "max_velocity"), xy
+    assert 0 < z <= cp.getfloat("printer", "max_z_velocity"), z
+
+
+# --------------------------------------------------------------------------
 # Print start: heating, deferred mesh, adaptive mesh.
 # --------------------------------------------------------------------------
 
@@ -386,7 +655,7 @@ def test_start_print_without_defer_still_meshes_and_grabs_the_first_tool(model):
     assert "BED_MESH_PROFILE LOAD=MESH_DATA" in out
     assert out.index("G28.1 Z") < out.index("BED_MESH_PROFILE LOAD=MESH_DATA")
     assert out.index("BED_MESH_PROFILE LOAD=MESH_DATA") < out.index("T2")
-    assert ("TOOLCHANGE_SET_PRINT_OFFSET NOZZLE=220.0 BED=60.0 LAYER=0.0 TOOL=2"
+    assert ("TOOLCHANGE_SET_PRINT_OFFSET NOZZLE=220.0 BED=60.0 LAYER=0.0"
             in out)
 
 
@@ -427,7 +696,7 @@ def test_the_adaptive_mesh_probes_then_grabs_the_first_tool(model):
     assert out.index(probe) < out.index("T1")
     assert out[-3:] == [
         "M104 S230.0 T1", "T1",
-        "TOOLCHANGE_SET_PRINT_OFFSET NOZZLE=230.0 BED=60.0 LAYER=0.2 TOOL=1"]
+        "TOOLCHANGE_SET_PRINT_OFFSET NOZZLE=230.0 BED=60.0 LAYER=0.2"]
 
 
 @pytest.mark.parametrize("model", MODELS)

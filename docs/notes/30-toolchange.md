@@ -96,3 +96,20 @@ sensors and Klipper config and has nothing to compare against.
 4. Modal-state restore added: the app leaks G90 + last feedrate + accel into whatever
    runs next; the port snapshots and restores absolute/relative mode, feedrate, and
    the pre-sequence accel limit.
+5. Dock motion is not the app's. The sequences above are what firmwareExe
+   does; the port keeps their sensor gates, attempts and lock steps but moves
+   differently, tuned on hardware:
+   - one feed (`fast_feed`, 36000) and accel (`accel_move`, 9600) for all
+     travel, with `SQUARE_CORNER_VELOCITY` 20 and `MINIMUM_CRUISE_RATIO` 0
+     for the length of a sequence (restored after);
+   - no X280 approach stage or dockX-10 release stage: the head travels to a
+     5 mm contact span in front of the dock and seats through it at 20 mm/s,
+     braking at 50 mm/s² (`contact_*`, `ease_distance`);
+   - the turn from the Y run into a dock lane is a quarter arc
+     (`corner_radius`, 20) kept at X ≤ `x_safe`; the Y run itself may be
+     diagonal when the head starts inside the corridor;
+   - pickup runs `MOTOR_GRAB2` at the dock instead of after a 20 mm pullback
+     (its `MANUAL_STEPPER` flushes the lookahead, so the pullback stopped the
+     head dead), then leaves the span at 20 mm/s and travels on with no stop;
+   - after a confirmed unlock the empty carriage leaves at travel speed.
+   `grabSpeed`/`grabSpeedSlow` from test.json therefore have no counterpart.

@@ -80,6 +80,16 @@ done
 # multi-extruder regression.
 pkg_stage "$PKG_DIR/payload/klipper/klippy/extras/exclude_object.py" \
           "klipper/klippy/extras/exclude_object.py"
+# The fork gave RunoutHelper.note_filament_present two extra position
+# parameters for its motion sensor. AFC (anvil-afc) wraps that method on the
+# sensors it creates and chooses how to call it from its parameter list; the
+# fork's four-parameter shape makes it choose wrong. These two overlays keep
+# upstream's two-parameter shape and record the positions through
+# note_runout_position instead, so the status fields are unchanged.
+for _e in filament_switch_sensor.py filament_motion_sensor.py; do
+    pkg_stage "$PKG_DIR/payload/klipper/klippy/extras/$_e" \
+              "klipper/klippy/extras/$_e"
+done
 
 # FLASHFORGE'S OWN chelper, at $MODDIR/prog/stock-chelper and never on klippy's
 # path. anvil-link-prog.sh puts it back over /usr/prog/klipper/klippy/chelper

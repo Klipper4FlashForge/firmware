@@ -68,3 +68,8 @@ def test_an_ordinary_boot_finishes_as_startup_not_setup(startup, monkeypatch):
     assert panel.frames[-1][2]["note"] == ""
     assert startup.TITLE == "REFORGE IS STARTING"
     assert "SETUP" not in startup.RETRY
+
+
+def test_factory_import_stamp_is_outside_the_reinstalled_payload(startup):
+    assert startup.STAMP == "/usr/data/anvil-data/.firmware-config-imported"
+    assert not startup.STAMP.startswith("/usr/data/anvil/")

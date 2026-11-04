@@ -14,13 +14,14 @@ this module holds is "the whole tree goes" and "the two things that outlive it
 did". Either alone is trivially satisfiable -- delete everything, or delete
 nothing -- and only both at once mean anything.
 
-The survivor is HelixScreen's settings, held on /tmp across the wipe and copied
-back over the tarball's seeded defaults. It is now the ONLY preservation
-mechanism in the installer, so it is asserted here with a value that could only
-have come from the printer. The config directory is the other half of the
-answer, and it is outside $MODDIR entirely: the live printer.cfg and
-moonraker-custom.conf in /usr/data/anvil-data/config are never candidates for
-deletion because the wipe cannot reach them.
+HelixScreen's settings are held on /tmp across the wipe and copied back over
+the tarball's seeded defaults. The old factory-import marker is copied once
+from the obsolete payload-tree location into persistent state before that same
+wipe. Both are asserted here with values that could only have come from the
+printer. The config directory is the other half of the answer, and it is
+outside $MODDIR entirely: the live printer.cfg and moonraker-custom.conf in
+/usr/data/anvil-data/config are never candidates for deletion because the wipe
+cannot reach them.
 
 THE NEGATIVE CONTROL IS INVERTED from what it used to be. `bin/not-ours` is a
 file no payload ever shipped, sitting in $MODDIR/bin beside one that has to go,
@@ -56,6 +57,8 @@ CONFDIR = "/usr/data/config"
 # precisely so that the wipe cannot reach printer.cfg and the SAVE_CONFIG
 # block of calibrated values at the end of it.
 CONFIG_DIR = "/usr/data/anvil-data/config"
+IMPORT_STAMP = "/usr/data/anvil-data/.firmware-config-imported"
+OLD_IMPORT_STAMP = MODDIR + "/.firmware-config-imported"
 LOG = "/usr/data/anvil-install.log"
 
 # The installer is a real file on a printer now -- app_startup.sh runs it out
@@ -209,6 +212,11 @@ def upgraded(first_install):
         "mkdir -p %(mod)s/init.d\n"
         "echo '#!/bin/sh' > %(mod)s/init.d/S70klipper\n"
         "echo '#!/bin/sh' > %(mod)s/anvil-service.sh\n"
+        # Older releases stored this once-ever marker in the payload tree.
+        # The fixed installer must carry it outside the wipe before deleting
+        # that tree.
+        "printf 'imported factory calibration\\n2026-09-01 12:00:00\\n' "
+        "> %(mod)s/.firmware-config-imported\n"
         # The survivor: HelixScreen writes its settings inside its own install
         # tree, so the wipe would take them without the /tmp stash.
         "mkdir -p %(mod)s/helixscreen/config\n"
@@ -262,6 +270,11 @@ def upgraded(first_install):
 
     _pack(box, BUILD + "/v2")
     box.upgrade_log = _install(box)
+    box.import_stamp_after_upgrade = box.file(IMPORT_STAMP).text
+    # Install the same release once more. The old marker is gone by now, so
+    # this proves the new durable location survives on its own rather than
+    # merely proving that the compatibility copy ran once.
+    box.reinstall_log = _install(box)
     return box
 
 
@@ -428,6 +441,19 @@ def test_the_users_config_directory_is_outside_the_wipe(upgraded):
     assertion that nothing needs to."""
     assert upgraded.file(CONFIG_DIR).is_dir, (
         "%s is gone -- the wipe reached outside $MODDIR" % CONFIG_DIR)
+
+
+def test_factory_import_marker_is_migrated_and_survives_reinstall(upgraded):
+    """The stock-JSON import is once per printer, not once per release."""
+    expected = "imported factory calibration\n2026-09-01 12:00:00\n"
+    assert upgraded.import_stamp_after_upgrade == expected, (
+        "the legacy marker was not migrated before $MODDIR was wiped")
+    assert upgraded.file(IMPORT_STAMP).text == expected, (
+        "%s did not survive a second firmware install" % IMPORT_STAMP)
+    assert not upgraded.file(OLD_IMPORT_STAMP).exists, (
+        "the obsolete marker unexpectedly survived inside $MODDIR")
+    assert "factory calibration import marker migrated" in upgraded.upgrade_log
+    assert "factory calibration import marker migrated" not in upgraded.reinstall_log
 
 
 def test_the_live_printer_cfg_survives_the_update(upgraded):

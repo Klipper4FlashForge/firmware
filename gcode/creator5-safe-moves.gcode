@@ -123,9 +123,9 @@ G4 P1000
 ;    SELECT_TOOL rather than a bare `T0`: the same code path, but
 ;    ff_print scans a file's first bare Tn to decide which tool to
 ;    prepare, and a file that names one would get a purge it does not
-;    want. [ff_toolchange] also ships restore_axis unset, so a change
-;    restores NO position -- every move after one re-states itself
-;    below, which is what your own sliced files must do too.
+;    want. A bare SELECT_TOOL restores NO position (only AFC's T<n>
+;    moves back to where it left), so every move after one re-states
+;    itself below, which is what your own sliced files must do too.
 ; --------------------------------------------------------------------
 M117 4/6 grab T0
 SELECT_TOOL T=0
